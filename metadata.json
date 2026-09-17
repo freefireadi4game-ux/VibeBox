@@ -1,0 +1,6 @@
+{
+  "name": "VIBEBOX",
+  "description": "A modern, minimalist personal music library and YouTube player for organizing playlists, favorites, and seamless queue playback.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
