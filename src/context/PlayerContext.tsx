@@ -375,24 +375,14 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 if (dur > 0) setDuration(dur);
               }
             } else if (state === 2) {
-              // Video was paused. If hidden and playback was intended, don't destroy session
-              if (document.hidden && intendedPlayingRef.current) {
-                // Keep background MediaSession alive on Android
-                startKeepAlive();
-                if ('mediaSession' in navigator) {
-                  try {
-                    navigator.mediaSession.playbackState = 'playing';
-                  } catch {}
-                }
-              } else {
-                setIsPlaying(false);
-                setIsLoading(false);
-                stopKeepAlive();
-                if ('mediaSession' in navigator) {
-                  try {
-                    navigator.mediaSession.playbackState = 'paused';
-                  } catch {}
-                }
+              // Video was paused (by user or mobile OS background policy)
+              setIsPlaying(false);
+              setIsLoading(false);
+              stopKeepAlive();
+              if ('mediaSession' in navigator) {
+                try {
+                  navigator.mediaSession.playbackState = 'paused';
+                } catch {}
               }
             } else if (state === 3) {
               setIsLoading(true);
@@ -891,19 +881,12 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             if (playerState !== 1 && playerState !== 3) {
               playerRef.current.playVideo();
               setIsPlaying(true);
+              if ('mediaSession' in navigator) {
+                navigator.mediaSession.playbackState = 'playing';
+              }
             }
           } catch (e) {
             console.warn('Visibility resume error:', e);
-          }
-        }
-      } else {
-        // When going into the background, make sure the silent keep-alive is active
-        if (intendedPlayingRef.current) {
-          startKeepAlive();
-          if ('mediaSession' in navigator) {
-            try {
-              navigator.mediaSession.playbackState = 'playing';
-            } catch {}
           }
         }
       }
@@ -916,7 +899,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       window.removeEventListener('focus', handleVisibilityOrFocus);
     };
-  }, [startKeepAlive]);
+  }, []);
 
   return (
     <PlayerContext.Provider

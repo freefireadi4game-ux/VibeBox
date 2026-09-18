@@ -8,10 +8,10 @@ export const YouTubeHost: React.FC = () => {
   return (
     <div
       id="vibebox-video-dock-container"
-      className={`fixed transition-all duration-300 z-40 ${
+      className={`fixed transition-all duration-300 ${
         isVideoVisible
-          ? 'bottom-24 right-4 md:bottom-28 md:right-8 w-72 sm:w-80 md:w-96 aspect-video bg-[#0b0e1d] rounded-2xl overflow-hidden shadow-2xl shadow-indigo-950/40 border border-white/15 backdrop-blur-xl opacity-100 pointer-events-auto'
-          : 'fixed -bottom-[9999px] -left-[9999px] w-64 h-36 opacity-0 pointer-events-none'
+          ? 'bottom-24 right-4 md:bottom-28 md:right-8 w-72 sm:w-80 md:w-96 aspect-video bg-[#0b0e1d] rounded-2xl overflow-hidden shadow-2xl shadow-indigo-950/40 border border-white/15 backdrop-blur-xl opacity-100 pointer-events-auto z-40'
+          : 'bottom-0 right-0 w-2 h-2 opacity-[0.02] pointer-events-none overflow-hidden z-0'
       }`}
     >
       {isVideoVisible && (
