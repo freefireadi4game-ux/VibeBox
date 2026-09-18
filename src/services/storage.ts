@@ -1,4 +1,5 @@
 import { Song, Playlist, UserSettings, PlaybackMode, RepeatOption } from '../types';
+import { toValidUUID, isValidUUID } from '../utils/uuid';
 
 const STORAGE_KEYS = {
   SONGS: 'vibebox_songs_v1',
@@ -9,10 +10,10 @@ const STORAGE_KEYS = {
   RECENT_SEARCHES: 'vibebox_recent_searches_v1',
 };
 
-// Curated starter songs
+// Curated starter songs with valid RFC4122 UUIDs
 export const DEFAULT_SEED_SONGS: Song[] = [
   {
-    id: 'seed-1',
+    id: toValidUUID('seed-1'),
     youtubeId: 'jfKfPfyJRdk', // lofi hip hop radio - beats to relax/study to
     title: 'Lofi Hip Hop Radio — Beats to Relax/Study to',
     channel: 'Lofi Girl',
@@ -24,7 +25,7 @@ export const DEFAULT_SEED_SONGS: Song[] = [
     lastPlayedAt: Date.now() - 3600000,
   },
   {
-    id: 'seed-2',
+    id: toValidUUID('seed-2'),
     youtubeId: '4xDzrJKXOOY', // Synthwave Radio - Chill synth / retro
     title: 'Synthwave Radio — Chill Synth / Retro Beats',
     channel: 'Lofi Girl Synthwave',
@@ -36,7 +37,7 @@ export const DEFAULT_SEED_SONGS: Song[] = [
     lastPlayedAt: Date.now() - 7200000,
   },
   {
-    id: 'seed-3',
+    id: toValidUUID('seed-3'),
     youtubeId: '5qap5aO4i9A', // lofi hip hop radio - beats to sleep/chill to
     title: 'Beats to Sleep / Chill to',
     channel: 'Lofi Girl',
@@ -47,7 +48,7 @@ export const DEFAULT_SEED_SONGS: Song[] = [
     playCount: 5,
   },
   {
-    id: 'seed-4',
+    id: toValidUUID('seed-4'),
     youtubeId: 'turpeP_c6yI', // Endless Journey - Ambient Space Music
     title: 'Endless Journey — Deep Ambient Chill',
     channel: 'Ambient Realm',
@@ -58,7 +59,7 @@ export const DEFAULT_SEED_SONGS: Song[] = [
     playCount: 7,
   },
   {
-    id: 'seed-5',
+    id: toValidUUID('seed-5'),
     youtubeId: 'DWcJFNfaw9c', // Coffee Shop Ambience & Smooth Jazz Beats
     title: 'Coffee Shop Ambience & Smooth Jazz Beats',
     channel: 'Coffee Chill Records',
@@ -70,7 +71,7 @@ export const DEFAULT_SEED_SONGS: Song[] = [
     lastPlayedAt: Date.now() - 1800000,
   },
   {
-    id: 'seed-6',
+    id: toValidUUID('seed-6'),
     youtubeId: 'rPjez8z61rI', // Midnight City Drive Synthwave
     title: 'Midnight City Drive — Cyberpunk Night Cruise',
     channel: 'Neon Wave',
@@ -84,19 +85,19 @@ export const DEFAULT_SEED_SONGS: Song[] = [
 
 export const DEFAULT_PLAYLISTS: Playlist[] = [
   {
-    id: 'pl-chill-vibes',
+    id: toValidUUID('pl-chill-vibes'),
     name: 'Midnight Chill Vibes',
     description: 'Relaxed beats for late night focus, coding, and unwinding.',
-    songIds: ['seed-1', 'seed-2', 'seed-5'],
+    songIds: [toValidUUID('seed-1'), toValidUUID('seed-2'), toValidUUID('seed-5')],
     createdAt: Date.now() - 86400000 * 7,
     updatedAt: Date.now() - 86400000 * 1,
     coverUrl: 'https://i.ytimg.com/vi/4xDzrJKXOOY/hqdefault.jpg',
   },
   {
-    id: 'pl-retro-synth',
+    id: toValidUUID('pl-retro-synth'),
     name: 'Retro Synthwave & Neon',
     description: '80s inspired futuristic cyber rhythms and deep basslines.',
-    songIds: ['seed-2', 'seed-6'],
+    songIds: [toValidUUID('seed-2'), toValidUUID('seed-6')],
     createdAt: Date.now() - 86400000 * 5,
     updatedAt: Date.now() - 86400000 * 2,
     coverUrl: 'https://i.ytimg.com/vi/rPjez8z61rI/hqdefault.jpg',
@@ -136,7 +137,22 @@ class StorageService {
         this.saveSongs(DEFAULT_SEED_SONGS);
         return DEFAULT_SEED_SONGS;
       }
-      return JSON.parse(data);
+      const parsed: Song[] = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        let changed = false;
+        const validated = parsed.map((s) => {
+          if (!isValidUUID(s.id)) {
+            changed = true;
+            return { ...s, id: toValidUUID(s.id) };
+          }
+          return s;
+        });
+        if (changed) {
+          this.saveSongs(validated);
+        }
+        return validated;
+      }
+      return DEFAULT_SEED_SONGS;
     } catch (e) {
       console.error('Failed to load songs from storage', e);
       return DEFAULT_SEED_SONGS;
@@ -145,7 +161,11 @@ class StorageService {
 
   saveSongs(songs: Song[]): void {
     try {
-      localStorage.setItem(STORAGE_KEYS.SONGS, JSON.stringify(songs));
+      const sanitized = songs.map((s) => ({
+        ...s,
+        id: toValidUUID(s.id),
+      }));
+      localStorage.setItem(STORAGE_KEYS.SONGS, JSON.stringify(sanitized));
     } catch (e) {
       console.error('Failed to save songs to storage', e);
     }
@@ -158,7 +178,24 @@ class StorageService {
         this.savePlaylists(DEFAULT_PLAYLISTS);
         return DEFAULT_PLAYLISTS;
       }
-      return JSON.parse(data);
+      const parsed: Playlist[] = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        let changed = false;
+        const validated = parsed.map((p) => {
+          const validId = toValidUUID(p.id);
+          const validSongIds = Array.isArray(p.songIds) ? p.songIds.map(toValidUUID) : [];
+          if (validId !== p.id || JSON.stringify(validSongIds) !== JSON.stringify(p.songIds)) {
+            changed = true;
+            return { ...p, id: validId, songIds: validSongIds };
+          }
+          return p;
+        });
+        if (changed) {
+          this.savePlaylists(validated);
+        }
+        return validated;
+      }
+      return DEFAULT_PLAYLISTS;
     } catch (e) {
       console.error('Failed to load playlists from storage', e);
       return DEFAULT_PLAYLISTS;
@@ -167,7 +204,12 @@ class StorageService {
 
   savePlaylists(playlists: Playlist[]): void {
     try {
-      localStorage.setItem(STORAGE_KEYS.PLAYLISTS, JSON.stringify(playlists));
+      const sanitized = playlists.map((p) => ({
+        ...p,
+        id: toValidUUID(p.id),
+        songIds: Array.isArray(p.songIds) ? p.songIds.map(toValidUUID) : [],
+      }));
+      localStorage.setItem(STORAGE_KEYS.PLAYLISTS, JSON.stringify(sanitized));
     } catch (e) {
       console.error('Failed to save playlists to storage', e);
     }
@@ -177,9 +219,13 @@ class StorageService {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.RECENTLY_PLAYED);
       if (!data) {
-        return ['seed-5', 'seed-1', 'seed-2'];
+        return [toValidUUID('seed-5'), toValidUUID('seed-1'), toValidUUID('seed-2')];
       }
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        return parsed.map(toValidUUID);
+      }
+      return [];
     } catch (e) {
       return [];
     }
@@ -187,7 +233,8 @@ class StorageService {
 
   saveRecentlyPlayedIds(ids: string[]): void {
     try {
-      const trimmed = Array.from(new Set(ids)).slice(0, 50);
+      const validIds = Array.isArray(ids) ? ids.map(toValidUUID) : [];
+      const trimmed = Array.from(new Set(validIds)).slice(0, 50);
       localStorage.setItem(STORAGE_KEYS.RECENTLY_PLAYED, JSON.stringify(trimmed));
     } catch (e) {
       console.error('Failed to save recently played IDs', e);

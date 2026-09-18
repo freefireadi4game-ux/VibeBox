@@ -61,6 +61,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const cloudProfile = await fetchUserProfileFromCloud(authUser.id);
       if (cloudProfile) {
+        cloudProfile.email = cloudProfile.email || authUser.email;
         // If profile exists, check if role needs promotion for the admin account
         if (isDesignatedAdmin && cloudProfile.role !== 'admin') {
           cloudProfile.role = 'admin';
