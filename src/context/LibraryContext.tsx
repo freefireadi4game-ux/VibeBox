@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { Song, Playlist, ToastMessage, ActivePage, UserSettings } from '../types';
 import { storage } from '../services/storage';
 import { useAuth } from './AuthContext';
-import { generateUUID } from '../utils/uuid';
+import { generateUUID, toValidUUID } from '../utils/uuid';
 import {
   isSupabaseConfigured,
   getSupabaseClient,
@@ -94,12 +94,31 @@ interface LibraryContextType {
 
 const LibraryContext = createContext<LibraryContextType | null>(null);
 
+const normalizeSongIds = (songs: Song[]): Song[] =>
+  songs.map((song) => ({
+    ...song,
+    id: toValidUUID(song.id),
+  }));
+
+const normalizePlaylistIds = (playlists: Playlist[]): Playlist[] =>
+  playlists.map((playlist) => ({
+    ...playlist,
+    id: toValidUUID(playlist.id),
+    songIds: playlist.songIds.map((songId) => toValidUUID(songId)),
+  }));
+
 export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, profile, isAdmin, isLoading: isAuthLoading } = useAuth();
 
-  const [songs, setSongs] = useState<Song[]>(() => storage.getSongs());
-  const [playlists, setPlaylists] = useState<Playlist[]>(() => storage.getPlaylists());
-  const [recentlyPlayedIds, setRecentlyPlayedIds] = useState<string[]>(() => storage.getRecentlyPlayedIds());
+  const [songs, setSongs] = useState<Song[]>(() =>
+  normalizeSongIds(storage.getSongs())
+);
+  const [playlists, setPlaylists] = useState<Playlist[]>(() =>
+  normalizePlaylistIds(storage.getPlaylists())
+);
+  const [recentlyPlayedIds, setRecentlyPlayedIds] = useState<string[]>(() =>
+  storage.getRecentlyPlayedIds().map((id) => toValidUUID(id))
+);
   const [settings, setSettings] = useState<UserSettings>(() => storage.getSettings());
   const [recentSearches, setRecentSearches] = useState<string[]>(() => storage.getRecentSearches());
   const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>(() =>
@@ -900,11 +919,14 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     (jsonString: string) => {
       const res = storage.importLibraryJSON(jsonString);
       if (res.success) {
-        const loadedSongs = storage.getSongs();
-        const loadedPlaylists = storage.getPlaylists();
+        const loadedSongs = normalizeSongIds(storage.getSongs());
+        const loadedPlaylists = normalizePlaylistIds(storage.getPlaylists());
+
         setSongs(loadedSongs);
         setPlaylists(loadedPlaylists);
-        setRecentlyPlayedIds(storage.getRecentlyPlayedIds());
+        setRecentlyPlayedIds(
+  storage.getRecentlyPlayedIds().map((id) => toValidUUID(id))
+);
         setSettings(storage.getSettings());
         setRecentSearches(storage.getRecentSearches());
         bulkSyncToCloud(loadedSongs, loadedPlaylists, user?.id).catch(console.warn);
