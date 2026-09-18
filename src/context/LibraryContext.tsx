@@ -105,7 +105,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       } else if (cloudSongs && cloudSongs.length === 0 && songs.length > 0) bulkSyncToCloud(songs, [], userId).catch(console.warn);
       if (cloudPlaylists !== null) {
         if (cloudPlaylists.length > 0) {
-          if (userId) { const ids = new Set(cloudPlaylists.map((p: Playlist) => p.id)); playlists.forEach((pl) => { if (!ids.has(pl.id) && pl.userId === userId && !pl.isSystem) { upsertPlaylistToCloud(pl, userId).catch((err) => console.error('Supabase: Offline playlist migration error:', err)); cloudPlaylists.push(pl); } }); }
+          if (userId) { const ids = new Set(cloudPlaylists.map((p: Playlist) => p.id)); playlists.forEach((pl) => { if (!ids.has(pl.id) && pl.userId === userId && !pl.isSystem) { upsertPlaylistToCloud(pl, userId).catch(console.warn); cloudPlaylists.push(pl); } }); }
           setPlaylists(cloudPlaylists); storage.savePlaylists(cloudPlaylists);
         } else { if (playlists.length > 0 && userId) playlists.forEach((pl) => upsertPlaylistToCloud(pl, userId).catch(console.warn)); setPlaylists(playlists); }
       }
@@ -122,7 +122,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
   useEffect(() => {
     const client = getSupabaseClient(); if (!client) return; let channel: any = null;
     const refresh = () => { if (document.visibilityState === 'visible') fetchPlaylistsFromCloud().then((fresh) => { if (fresh !== null) { setPlaylists(fresh); storage.savePlaylists(fresh); } }).catch(console.warn); };
-    try { channel = client.channel('public:vibebox-cross-device-sync').on('postgres_changes', { event: '*', schema: 'public', table: 'playlists' }, refresh).on('postgres_changes', { event: '*', schema: 'public', table: 'playlist_items' }, refresh).on('postgres_changes', { event: '*', schema: 'public', table: 'user_songs' }, () => { if (user?.id) fetchUserSongsFromCloud(user.id).then((rels) => { if (rels) setSongs((prev) => prev.map((song) => rels[song.id] ? { ...song, ...rels[song.id] } : song)); }).catch(console.warn); }).subscribe(); } catch (err) { console.warn('Supabase: Realtime channel init note:', err); }
+    try { channel = client.channel('public:vibebox-cross-device-sync').on('postgres_changes', { event: '*', schema: 'public', table: 'playlists' }, refresh).on('postgres_changes', { event: '*', schema: 'public', table: 'playlist_items' }, refresh).subscribe(); } catch (err) { console.warn('Supabase: Realtime channel init note:', err); }
     window.addEventListener('focus', refresh); document.addEventListener('visibilitychange', refresh);
     return () => { if (channel) client.removeChannel(channel); window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
   }, [user?.id]);
@@ -149,7 +149,6 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const newSong: Song = { ...songData, id: generateUUID(), addedAt: Date.now(), playCount: 0, userId: user?.id, isPublic: true };
     setSongs((prev) => [newSong, ...prev]);
     addToast('Song Added', `"${newSong.title}" saved to library.`, 'success');
-    // The playlist write must wait for the referenced public.songs row to exist.
     upsertSongToCloud(newSong).then((songSaved) => {
       if (!songSaved) { addToast('Cloud Save Failed', 'The song could not be saved to the cloud, so it was not added to the playlist.', 'error'); return; }
       if (user?.id && newSong.isFavorite) upsertUserSongToCloud(user.id, newSong.id, { isFavorite: true }).catch(console.warn);
@@ -164,25 +163,94 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return newSong;
   }, [songs, user, canManagePlaylist, addToast]);
 
-  const updateSong = useCallback((id: string, updates: Partial<Song>) => { const target = songs.find((s) => s.id === id); if (target && !canManageSong(target)) { addToast('Permission Denied', 'Only the owner or an admin can update this track.', 'error'); return; } setSongs((prev) => prev.map((s) => { if (s.id !== id) return s; const updated = { ...s, ...updates }; upsertSongToCloud(updated).catch(console.warn); return updated; })); addToast('Updated', 'Song information updated.', 'info'); }, [songs, canManageSong, addToast]);
-  const deleteSong = useCallback((id: string) => { const target = songs.find((s) => s.id === id); if (target && !canManageSong(target)) { setPlaylists((prev) => prev.map((pl) => canManagePlaylist(pl) && pl.songIds.includes(id) ? { ...pl, songIds: pl.songIds.filter((songId) => songId !== id), updatedAt: Date.now() } : pl)); addToast('Removed', `"${target.title}" removed from your playlists.`, 'info'); return; } setSongs((prev) => prev.filter((s) => s.id !== id)); setPlaylists((prev) => prev.map((pl) => pl.songIds.includes(id) ? { ...pl, songIds: pl.songIds.filter((songId) => songId !== id), updatedAt: Date.now() } : pl)); setRecentlyPlayedIds((prev) => prev.filter((songId) => songId !== id)); deleteSongFromCloud(id).catch(console.warn); if (target) addToast('Song Removed', `"${target.title}" was removed from library.`, 'info'); }, [songs, canManageSong, canManagePlaylist, addToast]);
+  const updateSong = useCallback((id: string, updates: Partial<Song>) => { const target = songs.find((s) => s.id === id); if (target && !canManageSong(target)) { addToast('Permission Denied', 'Only the owner or an admin can update this track.', 'error'); return; } setSongs((prev) => prev.map((song) => { if (song.id !== id) return song; const updated = { ...song, ...updates }; upsertSongToCloud(updated).catch(console.warn); return updated; })); addToast('Updated', 'Song information updated.', 'info'); }, [songs, canManageSong, addToast]);
+  const deleteSong = useCallback((id: string) => { const target = songs.find((s) => s.id === id); if (target && !canManageSong(target)) { setPlaylists((prev) => prev.map((pl) => canManagePlaylist(pl) && pl.songIds.includes(id) ? { ...pl, songIds: pl.songIds.filter((songId) => songId !== id), updatedAt: Date.now() } : pl)); addToast('Permission Denied', 'Only the owner or an admin can delete this track.', 'error'); return; } setSongs((prev) => prev.filter((song) => song.id !== id)); setPlaylists((prev) => prev.map((pl) => canManagePlaylist(pl) && pl.songIds.includes(id) ? { ...pl, songIds: pl.songIds.filter((songId) => songId !== id), updatedAt: Date.now() } : pl)); setRecentlyPlayedIds((prev) => prev.filter((songId) => songId !== id)); deleteSongFromCloud(id).catch(console.warn); if (target) addToast('Song Removed', `"${target.title}" was removed from your library.`, 'info'); }, [songs, canManageSong, canManagePlaylist, addToast]);
   const toggleFavorite = useCallback((id: string) => { let favorite = false; let title = ''; setSongs((prev) => prev.map((song) => { if (song.id !== id) return song; favorite = !song.isFavorite; title = song.title; return { ...song, isFavorite: favorite }; })); if (user?.id) upsertUserSongToCloud(user.id, id, { isFavorite: favorite }).catch(console.warn); if (title) addToast(favorite ? 'Added to Favorites' : 'Removed from Favorites', `"${title}"`, 'success'); }, [user, addToast]);
   const recordPlay = useCallback((id: string) => { const now = Date.now(); let count = 1; setSongs((prev) => prev.map((song) => { if (song.id !== id) return song; count = (song.playCount || 0) + 1; return { ...song, playCount: count, lastPlayedAt: now }; })); setRecentlyPlayedIds((prev) => [id, ...prev.filter((item) => item !== id)].slice(0, 50)); if (user?.id) { upsertUserSongToCloud(user.id, id, { playCount: count, lastPlayedAt: now }).catch(console.warn); recordRecentlyPlayedInCloud(user.id, id).catch(console.warn); } }, [user]);
 
-  const createPlaylist = useCallback((name: string, description?: string): Playlist => { const creatorName = profile?.username || profile?.full_name || user?.user_metadata?.username || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'You'; const playlist: Playlist = { id: generateUUID(), name: name.trim() || 'Untitled Playlist', description: description?.trim() || '', songIds: [], createdAt: Date.now(), updatedAt: Date.now(), userId: user?.id, creatorName, isPublic: true }; setPlaylists((prev) => [playlist, ...prev]); upsertPlaylistToCloud(playlist, user?.id).catch(console.warn); addToast('Playlist Created', `"${playlist.name}" created.`, 'success'); return playlist; }, [user, profile, addToast]);
+  const createPlaylist = useCallback((name: string, description?: string): Playlist => { const creatorName = profile?.username || profile?.full_name || user?.user_metadata?.username || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'You'; const playlist: Playlist = { id: generateUUID(), name: name.trim() || 'Untitled Playlist', description: description?.trim() || '', songIds: [], createdAt: Date.now(), updatedAt: Date.now(), userId: user?.id, creatorName, isPublic: true }; setPlaylists((prev) => [playlist, ...prev]); upsertPlaylistToCloud(playlist, user?.id).catch(console.warn); addToast('Playlist Created', `"${playlist.name}" created.`, 'success'); return playlist; }, [profile, user, addToast]);
   const updatePlaylist = useCallback((id: string, updates: Partial<Playlist>) => { const target = playlists.find((p) => p.id === id); if (target && !canManagePlaylist(target)) { addToast('Permission Denied', 'You can only edit playlists you created.', 'error'); return; } setPlaylists((prev) => prev.map((pl) => { if (pl.id !== id) return pl; const updated = { ...pl, ...updates, updatedAt: Date.now() }; upsertPlaylistToCloud(updated, user?.id).catch(console.warn); return updated; })); addToast('Playlist Updated', 'Changes saved.', 'info'); }, [playlists, canManagePlaylist, user, addToast]);
   const deletePlaylist = useCallback((id: string) => { const pl = playlists.find((p) => p.id === id); if (pl && !canManagePlaylist(pl)) { addToast('Permission Denied', 'You can only delete playlists you created.', 'error'); return; } setPlaylists((prev) => prev.filter((p) => p.id !== id)); deletePlaylistFromCloud(id).catch(console.warn); if (selectedPlaylistId === id) setActivePage('playlists'); if (pl) addToast('Playlist Deleted', `"${pl.name}" removed.`, 'info'); }, [playlists, canManagePlaylist, selectedPlaylistId, setActivePage, addToast]);
-  const addSongToPlaylist = useCallback((playlistId: string, songId: string) => { const target = playlists.find((p) => p.id === playlistId); if (target && !canManagePlaylist(target)) { addToast('Permission Denied', 'You can only modify playlists you created.', 'error'); return; } let name = ''; setPlaylists((prev) => prev.map((pl) => { if (pl.id !== playlistId) return pl; name = pl.name; if (pl.songIds.includes(songId)) return pl; const updated = { ...pl, songIds: [...pl.songIds, songId], updatedAt: Date.now() }; upsertPlaylistToCloud(updated, user?.id).catch(console.warn); return updated; })); addToast('Added to Playlist', `Saved to ${name || 'playlist'}`, 'success'); }, [playlists, canManagePlaylist, user, addToast]);
-  const removeSongFromPlaylist = useCallback((playlistId: string, songId: string) => { const target = playlists.find((p) => p.id === playlistId); if (target && !canManagePlaylist(target)) { addToast('Permission Denied', 'You can only modify playlists you created.', 'error'); return; } setPlaylists((prev) => prev.map((pl) => { if (pl.id !== playlistId) return pl; const updated = { ...pl, songIds: pl.songIds.filter((id) => id !== songId), updatedAt: Date.now() }; upsertPlaylistToCloud(updated, user?.id).catch(console.warn); return updated; })); addToast('Removed from Playlist', 'Track removed.', 'info'); }, [playlists, canManagePlaylist, user, addToast]);
-  const reorderPlaylistSongs = useCallback((playlistId: string, fromIndex: number, toIndex: number) => { const target = playlists.find((p) => p.id === playlistId); if (target && !canManagePlaylist(target)) { addToast('Permission Denied', 'You can only reorder your own playlists.', 'error'); return; } setPlaylists((prev) => prev.map((pl) => { if (pl.id !== playlistId) return pl; const ids = [...pl.songIds]; const [moved] = ids.splice(fromIndex, 1); ids.splice(toIndex, 0, moved); const updated = { ...pl, songIds: ids, updatedAt: Date.now() }; upsertPlaylistToCloud(updated, user?.id).catch(console.warn); return updated; })); }, [playlists, canManagePlaylist, user, addToast]);
+  const addSongToPlaylist = useCallback((playlistId: string, songId: string) => {
+    const target = playlists.find((p) => p.id === playlistId);
+    if (target && !canManagePlaylist(target)) {
+      addToast('Permission Denied', 'You can only modify playlists you created.', 'error');
+      return;
+    }
+
+    let name = '';
+    setPlaylists((prev) => prev.map((pl) => {
+      if (pl.id !== playlistId) return pl;
+      name = pl.name;
+      if (pl.songIds.includes(songId)) return pl;
+
+      const updated = { ...pl, songIds: [...pl.songIds, songId], updatedAt: Date.now() };
+
+      upsertPlaylistToCloud(updated, user?.id)
+        .then((success) => {
+          if (!success) {
+            addToast(
+              'Playlist Save Failed',
+              'The track was added locally, but could not be saved to the cloud playlist.',
+              'error'
+            );
+            return;
+          }
+
+          addToast('Added to Playlist', `Saved to ${name || 'playlist'}`, 'success');
+        })
+        .catch((error) => {
+          console.error('Supabase: Add song to playlist error:', error);
+          addToast(
+            'Playlist Save Failed',
+            'The track was added locally, but could not be saved to the cloud playlist.',
+            'error'
+          );
+        });
+
+      return updated;
+    }));
+  }, [playlists, canManagePlaylist, user, addToast]);
+
+  const removeSongFromPlaylist = useCallback((playlistId: string, songId: string) => {
+    const target = playlists.find((p) => p.id === playlistId);
+    if (target && !canManagePlaylist(target)) {
+      addToast('Permission Denied', 'You can only modify playlists you created.', 'error');
+      return;
+    }
+    setPlaylists((prev) => prev.map((pl) => {
+      if (pl.id !== playlistId) return pl;
+      const updated = { ...pl, songIds: pl.songIds.filter((id) => id !== songId), updatedAt: Date.now() };
+      upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
+      return updated;
+    }));
+    addToast('Removed from Playlist', 'Track removed.', 'info');
+  }, [playlists, canManagePlaylist, user, addToast]);
+
+  const reorderPlaylistSongs = useCallback((playlistId: string, fromIndex: number, toIndex: number) => {
+    const target = playlists.find((p) => p.id === playlistId);
+    if (target && !canManagePlaylist(target)) {
+      addToast('Permission Denied', 'You can only reorder playlists you created.', 'error');
+      return;
+    }
+    setPlaylists((prev) => prev.map((pl) => {
+      if (pl.id !== playlistId) return pl;
+      const ids = [...pl.songIds];
+      const [moved] = ids.splice(fromIndex, 1);
+      ids.splice(toIndex, 0, moved);
+      const updated = { ...pl, songIds: ids, updatedAt: Date.now() };
+      upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
+      return updated;
+    }));
+  }, [playlists, canManagePlaylist, user, addToast]);
 
   const clearRecentlyPlayed = useCallback(() => { setRecentlyPlayedIds([]); if (user?.id) clearRecentlyPlayedInCloud(user.id).catch(console.warn); addToast('History Cleared', 'Recently played tracks cleared.', 'info'); }, [user, addToast]);
   const clearAllData = useCallback(() => { storage.clearAllData(); setSongs([]); setPlaylists([]); setRecentlyPlayedIds([]); setRecentSearches([]); addToast('All Data Cleared', 'Library reset successfully.', 'info'); }, [addToast]);
   const exportLibrary = useCallback(() => { const blob = new Blob([storage.exportLibraryJSON()], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `vibebox-library-${new Date().toISOString().slice(0, 10)}.json`; document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(url); addToast('Export Successful', 'Library backup downloaded.', 'success'); }, [addToast]);
-  const importLibrary = useCallback((jsonString: string) => { const result = storage.importLibraryJSON(jsonString); if (result.success) { const loadedSongs = normalizeSongIds(storage.getSongs()); const loadedPlaylists = normalizePlaylistIds(storage.getPlaylists()); setSongs(loadedSongs); setPlaylists(loadedPlaylists); setRecentlyPlayedIds(storage.getRecentlyPlayedIds().map(toValidUUID)); setSettings(storage.getSettings()); setRecentSearches(storage.getRecentSearches()); bulkSyncToCloud(loadedSongs, loadedPlaylists, user?.id).catch(console.warn); addToast('Import Successful', result.message, 'success'); } else addToast('Import Failed', result.message, 'error'); return result; }, [user, addToast]);
+  const importLibrary = useCallback((jsonString: string) => { const result = storage.importLibraryJSON(jsonString); if (result.success) { const loadedSongs = normalizeSongIds(storage.getSongs()); const loadedPlaylists = normalizePlaylistIds(storage.getPlaylists()); setSongs(loadedSongs); setPlaylists(loadedPlaylists); setRecentlyPlayedIds(storage.getRecentlyPlayedIds().map(toValidUUID)); setSettings(storage.getSettings()); setRecentSearches(storage.getRecentSearches()); bulkSyncToCloud(loadedSongs, loadedPlaylists, user?.id).catch(console.warn); addToast('Import Successful', result.message, 'success'); } else { addToast('Import Failed', result.message, 'error'); } return result; }, [user, addToast]);
   const favorites = useMemo(() => songs.filter((song) => song.isFavorite), [songs]);
   const recentlyPlayed = useMemo(() => { const map = new Map(songs.map((song) => [song.id, song])); return recentlyPlayedIds.map((id) => map.get(id)).filter((song): song is Song => Boolean(song)); }, [songs, recentlyPlayedIds]);
 
-  return <LibraryContext.Provider value={{ songs, playlists, recentlyPlayed, favorites, activePage, selectedPlaylistId, searchQuery, searchFilter, settings, recentSearches, cloudSyncStatus, isCloudConnected: isSupabaseConfigured(), syncWithCloud, isAddSongOpen, isCreatePlaylistOpen, playlistToEdit, songToAddToPlaylist, toasts, canManagePlaylist, canManageSong, setActivePage, setSearchQuery, setSearchFilter, updateSettings, addRecentSearch, clearRecentSearches, addSong, updateSong, deleteSong, toggleFavorite, recordPlay, createPlaylist, updatePlaylist, deletePlaylist, addSongToPlaylist, removeSongFromPlaylist, reorderPlaylistSongs, clearRecentlyPlayed, clearAllData, importLibrary, exportLibrary, openAddSongModal: () => setIsAddSongOpen(true), closeAddSongModal: () => setIsAddSongOpen(false), openCreatePlaylistModal: (playlist) => { setPlaylistToEdit(playlist || null); setIsCreatePlaylistOpen(true); }, closeCreatePlaylistModal: () => { setPlaylistToEdit(null); setIsCreatePlaylistOpen(false); }, openAddToPlaylistModal: (song) => setSongToAddToPlaylist(song), closeAddToPlaylistModal: () => setSongToAddToPlaylist(null), addToast, removeToast }}>{children}</LibraryContext.Provider>;
+  return <LibraryContext.Provider value={{ songs, playlists, recentlyPlayed, favorites, activePage, selectedPlaylistId, searchQuery, searchFilter, settings, recentSearches, cloudSyncStatus, isCloudConnected: isSupabaseConfigured(), syncWithCloud, isAddSongOpen, isCreatePlaylistOpen, playlistToEdit, songToAddToPlaylist, toasts, canManagePlaylist, canManageSong, setActivePage, setSearchQuery, setSearchFilter, updateSettings, addRecentSearch, clearRecentSearches, addSong, updateSong, deleteSong, toggleFavorite, recordPlay, createPlaylist, updatePlaylist, deletePlaylist, addSongToPlaylist, removeSongFromPlaylist, reorderPlaylistSongs, clearRecentlyPlayed, clearAllData, importLibrary, exportLibrary, openAddSongModal: () => setIsAddSongOpen(true), closeAddSongModal: () => setIsAddSongOpen(false), openCreatePlaylistModal: (playlist?: Playlist | null) => { setPlaylistToEdit(playlist ?? null); setIsCreatePlaylistOpen(true); }, closeCreatePlaylistModal: () => { setPlaylistToEdit(null); setIsCreatePlaylistOpen(false); }, openAddToPlaylistModal: (song: Song) => setSongToAddToPlaylist(song), closeAddToPlaylistModal: () => setSongToAddToPlaylist(null), addToast, removeToast }}>{children}</LibraryContext.Provider>;
 };
 export const useLibrary = () => { const context = useContext(LibraryContext); if (!context) throw new Error('useLibrary must be used within a LibraryProvider'); return context; };
