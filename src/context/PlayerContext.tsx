@@ -375,14 +375,32 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 if (dur > 0) setDuration(dur);
               }
             } else if (state === 2) {
-              // Video was paused (by user or mobile OS background policy)
-              setIsPlaying(false);
-              setIsLoading(false);
-              stopKeepAlive();
-              if ('mediaSession' in navigator) {
-                try {
-                  navigator.mediaSession.playbackState = 'paused';
-                } catch {}
+              // Video was paused
+              if (intendedPlayingRef.current) {
+                // If playback is intended (e.g. background suspension or resume from widget),
+                // maintain keepAlive so Android Audio Focus is not lost, and re-trigger play
+                startKeepAlive();
+                if ('mediaSession' in navigator) {
+                  try {
+                    navigator.mediaSession.playbackState = 'playing';
+                  } catch {}
+                }
+                setTimeout(() => {
+                  if (intendedPlayingRef.current && playerRef.current && playerReadyRef.current) {
+                    try {
+                      playerRef.current.playVideo();
+                    } catch {}
+                  }
+                }, 100);
+              } else {
+                setIsPlaying(false);
+                setIsLoading(false);
+                stopKeepAlive();
+                if ('mediaSession' in navigator) {
+                  try {
+                    navigator.mediaSession.playbackState = 'paused';
+                  } catch {}
+                }
               }
             } else if (state === 3) {
               setIsLoading(true);
