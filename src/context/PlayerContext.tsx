@@ -83,6 +83,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const currentRepeatIterationRef = useRef<number>(1);
   const isPlayingRef = useRef<boolean>(false);
   const isSkippingRef = useRef<boolean>(false);
+  const intendedPlayingRef = useRef<boolean>(false);
 
   // Keep refs in sync
   currentSongRef.current = currentSong;
@@ -138,6 +139,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // Reset repeat counter whenever track changes
     setCurrentRepeatIteration(1);
     currentRepeatIterationRef.current = 1;
+    intendedPlayingRef.current = true;
 
     if (playerRef.current && playerReadyRef.current) {
       try {
@@ -316,13 +318,25 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               setIsPlaying(true);
               setIsLoading(false);
               setError(null);
+              intendedPlayingRef.current = true;
+              if ('mediaSession' in navigator) {
+                try {
+                  navigator.mediaSession.playbackState = 'playing';
+                } catch {}
+              }
               if (playerRef.current?.getDuration) {
                 const dur = playerRef.current.getDuration() || 0;
                 if (dur > 0) setDuration(dur);
               }
             } else if (state === 2) {
+              // Video was paused (by user or by OS when minimized)
               setIsPlaying(false);
               setIsLoading(false);
+              if ('mediaSession' in navigator) {
+                try {
+                  navigator.mediaSession.playbackState = 'paused';
+                } catch {}
+              }
             } else if (state === 3) {
               setIsLoading(true);
             } else if (state === 0) {
@@ -435,6 +449,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Reset repeat counter
       setCurrentRepeatIteration(1);
       currentRepeatIterationRef.current = 1;
+      intendedPlayingRef.current = true;
 
       if (playerRef.current && playerReadyRef.current) {
         try {
@@ -463,9 +478,11 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     try {
       if (isPlaying) {
+        intendedPlayingRef.current = false;
         playerRef.current.pauseVideo();
         setIsPlaying(false);
       } else {
+        intendedPlayingRef.current = true;
         playerRef.current.playVideo();
         setIsPlaying(true);
       }
@@ -655,6 +672,153 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [togglePlay, nextSong, prevSong, seekTo, toggleMute, duration, currentTime]);
+
+  // MediaSession API Integration (Lock Screen, Notification Shade & Hardware Media Keys)
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+
+    if (currentSong) {
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: currentSong.title,
+          artist: currentSong.channel || 'VIBEBOX Artist',
+          album: 'VIBEBOX Music',
+          artwork: [
+            { src: currentSong.thumbnailUrl, sizes: '96x96', type: 'image/jpeg' },
+            { src: currentSong.thumbnailUrl, sizes: '128x128', type: 'image/jpeg' },
+            { src: currentSong.thumbnailUrl, sizes: '256x256', type: 'image/jpeg' },
+            { src: currentSong.thumbnailUrl, sizes: '512x512', type: 'image/jpeg' },
+          ],
+        });
+      } catch (e) {
+        console.warn('MediaSession metadata error', e);
+      }
+    } else {
+      navigator.mediaSession.metadata = null;
+    }
+
+    try {
+      navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+    } catch {}
+  }, [currentSong, isPlaying]);
+
+  // MediaSession Action Handlers
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+
+    const setHandler = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+      try {
+        navigator.mediaSession.setActionHandler(action, handler);
+      } catch {
+        // Action not supported in browser
+      }
+    };
+
+    setHandler('play', () => {
+      intendedPlayingRef.current = true;
+      if (playerRef.current && playerReadyRef.current) {
+        playerRef.current.playVideo();
+        setIsPlaying(true);
+      } else {
+        togglePlay();
+      }
+    });
+
+    setHandler('pause', () => {
+      intendedPlayingRef.current = false;
+      if (playerRef.current && playerReadyRef.current) {
+        playerRef.current.pauseVideo();
+        setIsPlaying(false);
+      }
+    });
+
+    setHandler('previoustrack', () => {
+      prevSong();
+    });
+
+    setHandler('nexttrack', () => {
+      nextSong();
+    });
+
+    setHandler('seekto', (details) => {
+      if (details.seekTime !== undefined && details.seekTime !== null) {
+        seekTo(details.seekTime);
+      }
+    });
+
+    setHandler('seekbackward', (details) => {
+      seekTo(Math.max(0, currentTime - (details.seekOffset || 10)));
+    });
+
+    setHandler('seekforward', (details) => {
+      seekTo(Math.min(duration, currentTime + (details.seekOffset || 10)));
+    });
+
+    setHandler('stop', () => {
+      intendedPlayingRef.current = false;
+      if (playerRef.current && playerReadyRef.current) {
+        playerRef.current.pauseVideo();
+        setIsPlaying(false);
+      }
+    });
+
+    return () => {
+      const actions: MediaSessionAction[] = [
+        'play',
+        'pause',
+        'previoustrack',
+        'nexttrack',
+        'seekto',
+        'seekbackward',
+        'seekforward',
+        'stop',
+      ];
+      actions.forEach((a) => setHandler(a, null));
+    };
+  }, [togglePlay, prevSong, nextSong, seekTo, currentTime, duration]);
+
+  // MediaSession Position State sync
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || !('setPositionState' in navigator.mediaSession)) return;
+    if (duration > 0 && currentTime >= 0) {
+      try {
+        navigator.mediaSession.setPositionState({
+          duration: Math.max(0, duration),
+          playbackRate: 1,
+          position: Math.min(duration, Math.max(0, currentTime)),
+        });
+      } catch {}
+    }
+  }, [currentTime, duration]);
+
+  // Automatic Tab Visibility and Focus Auto-Resume Listener
+  useEffect(() => {
+    const handleVisibilityOrFocus = () => {
+      if (!document.hidden) {
+        // App returned to foreground / user came back to the tab
+        if (intendedPlayingRef.current && playerRef.current && playerReadyRef.current) {
+          try {
+            const playerState = playerRef.current.getPlayerState ? playerRef.current.getPlayerState() : -1;
+            // 1 = playing, 3 = buffering. If paused (2) or cued (5) or unstarted (-1), resume
+            if (playerState !== 1 && playerState !== 3) {
+              playerRef.current.playVideo();
+              setIsPlaying(true);
+            }
+          } catch (e) {
+            console.warn('Visibility resume error:', e);
+          }
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+    };
+  }, []);
 
   return (
     <PlayerContext.Provider

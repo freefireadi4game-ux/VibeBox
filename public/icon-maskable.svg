@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGradMask" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#18113c" />
+      <stop offset="50%" stop-color="#0b0e24" />
+      <stop offset="100%" stop-color="#050714" />
+    </linearGradient>
+    <linearGradient id="glowGradMask" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6" />
+      <stop offset="50%" stop-color="#ec4899" />
+      <stop offset="100%" stop-color="#3b82f6" />
+    </linearGradient>
+    <linearGradient id="waveGradMask" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="50%" stop-color="#a855f7" />
+      <stop offset="100%" stop-color="#ec4899" />
+    </linearGradient>
+  </defs>
+
+  <!-- Full-bleed background for maskable -->
+  <rect width="512" height="512" fill="url(#bgGradMask)" />
+
+  <!-- Center icon scaled into safe zone (80% / 0.8 scale) -->
+  <g transform="translate(136, 136) scale(0.8)">
+    <rect x="0" y="0" width="300" height="300" rx="64" fill="#0d112d" stroke="url(#glowGradMask)" stroke-width="10" />
+    <rect x="45" y="110" width="22" height="80" rx="11" fill="url(#waveGradMask)" />
+    <rect x="85" y="70" width="22" height="160" rx="11" fill="url(#waveGradMask)" />
+    <rect x="125" y="40" width="22" height="220" rx="11" fill="url(#glowGradMask)" />
+    <rect x="165" y="65" width="22" height="170" rx="11" fill="url(#waveGradMask)" />
+    <rect x="205" y="100" width="22" height="100" rx="11" fill="url(#waveGradMask)" />
+    <rect x="245" y="130" width="22" height="40" rx="11" fill="url(#waveGradMask)" />
+  </g>
+</svg>

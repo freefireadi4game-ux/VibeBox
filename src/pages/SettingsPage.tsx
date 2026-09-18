@@ -14,10 +14,13 @@ import {
   Check,
   Repeat,
   Activity,
+  Smartphone,
+  Radio,
 } from 'lucide-react';
 import { useLibrary } from '../context/LibraryContext';
 import { usePlayer } from '../context/PlayerContext';
 import { ConfirmationModal } from '../components/common/ConfirmationModal';
+import { PWAInstallButton } from '../components/common/PWAInstallButton';
 import { ThemeName } from '../types';
 import { DEFAULT_VISUALIZER_CONFIG } from '../components/visualizer/visualizerTypes';
 
@@ -450,7 +453,56 @@ export const SettingsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 5. Official YouTube Compliance Notice */}
+      {/* 5. Install App as Standalone PWA */}
+      <div className="p-6 rounded-3xl bg-gradient-to-br from-violet-950/40 via-indigo-950/20 to-black/40 border border-violet-500/20 space-y-4 shadow-xl backdrop-blur-xl">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 rounded-xl bg-violet-500/15 text-violet-300 border border-violet-500/20">
+            <Smartphone className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-white">Install VIBEBOX App (PWA)</h3>
+            <p className="text-xs text-zinc-400">Install as standalone app on Android, iOS, or Desktop.</p>
+          </div>
+        </div>
+
+        <div className="space-y-3 pt-1">
+          <p className="text-xs text-zinc-300 leading-relaxed">
+            Install VIBEBOX on your home screen to launch in true full-screen standalone mode with no browser address bars and fast offline shell caching.
+          </p>
+          <div className="pt-2">
+            <PWAInstallButton variant="full" />
+          </div>
+        </div>
+      </div>
+
+      {/* 6. Background Playback & Lock Screen Controls */}
+      <div className="p-6 rounded-3xl bg-white/[0.03] border border-white/[0.08] space-y-4 shadow-xl backdrop-blur-xl">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 rounded-xl bg-emerald-500/15 text-emerald-300 border border-emerald-500/20">
+            <Radio className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-white">Media Session & Background Playback</h3>
+            <p className="text-xs text-zinc-400">Lock screen controls, hardware keys & Android background playback</p>
+          </div>
+        </div>
+
+        <div className="space-y-2 text-xs text-zinc-300 leading-relaxed bg-black/20 p-4 rounded-2xl border border-white/[0.05]">
+          <div className="flex items-start gap-2">
+            <Smartphone className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
+            <div>
+              <p className="font-semibold text-white">Persistent Media Controller Features:</p>
+              <ul className="list-disc pl-4 space-y-1 text-zinc-400 mt-1">
+                <li><strong>MediaSession API</strong>: Real-time track metadata (song title, channel/artist, high-res artwork) with Play, Pause, Next, Prev, and Seek controls on your notification shade and lock screen.</li>
+                <li><strong>Hardware Media Keys</strong>: Use Bluetooth headphones or car stereo buttons to play, pause, or skip tracks effortlessly.</li>
+                <li><strong>Uninterrupted Android Background Playback</strong>: To prevent Android Chrome from pausing media when you switch apps, turn on <em>&quot;Desktop site&quot;</em> in Chrome menu (⋮) or enable Picture-in-Picture mode.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 6. Official YouTube Compliance Notice */}
       <div className="p-5 rounded-2xl bg-white/[0.02] border border-white/[0.06] text-xs text-zinc-500 space-y-2 backdrop-blur-md">
         <div className="flex items-center gap-2 text-zinc-300 font-semibold">
           <ShieldCheck className="w-4 h-4 text-violet-400" />

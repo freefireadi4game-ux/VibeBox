@@ -14,6 +14,7 @@ import {
 import { useLibrary } from '../../context/LibraryContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { AudioVisualizer } from '../player/AudioVisualizer';
+import { PWAInstallButton } from '../common/PWAInstallButton';
 
 interface SidebarProps {
   onOpenShortcuts?: () => void;
@@ -149,6 +150,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenShortcuts }) => {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* PWA Install Action */}
+      <div className="my-2">
+        <PWAInstallButton variant="full" />
       </div>
 
       {/* Bottom Footer: Library stats & Shortcuts trigger */}

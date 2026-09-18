@@ -2,6 +2,7 @@ import React from 'react';
 import { Search, Plus, Settings, Radio, Keyboard, ShieldCheck } from 'lucide-react';
 import { useLibrary } from '../../context/LibraryContext';
 import { usePlayer } from '../../context/PlayerContext';
+import { PWAInstallButton } from '../common/PWAInstallButton';
 
 interface TopHeaderProps {
   onOpenShortcuts?: () => void;
@@ -59,6 +60,9 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenShortcuts }) => {
 
       {/* Right: Header Actions */}
       <div className="flex items-center gap-2 sm:gap-3">
+        {/* PWA Install Button */}
+        <PWAInstallButton variant="header" />
+
         {/* Quick Search Button with Shortcut indicator */}
         <button
           onClick={() => setActivePage('search')}
