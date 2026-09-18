@@ -206,6 +206,7 @@ create policy "Public playlists are viewable by everyone"
   using (
     is_public = true 
     or auth.uid() = user_id 
+    or user_id is null
     or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
   );
 
@@ -228,6 +229,7 @@ create policy "Users can update only their own playlists"
   on public.playlists for update
   using (
     auth.uid() = user_id 
+    or user_id is null
     or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
   );
 
@@ -237,11 +239,98 @@ create policy "Users can delete only their own playlists"
   on public.playlists for delete
   using (
     auth.uid() = user_id 
+    or user_id is null
     or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
   );
 
 
--- 4. USER_SETTINGS TABLE (Favorites, Recently Played, Settings, Recent Searches)
+-- 4. PLAYLIST_ITEMS TABLE (Individual track associations per playlist)
+create table if not exists public.playlist_items (
+  id text primary key,
+  playlist_id text references public.playlists(id) on delete cascade not null,
+  song_id text not null,
+  position integer default 0,
+  added_at bigint default (extract(epoch from now()) * 1000)::bigint,
+  user_id uuid references auth.users on delete cascade,
+  created_at timestamptz default now()
+);
+
+-- Ensure all columns exist on playlist_items table
+alter table public.playlist_items add column if not exists playlist_id text references public.playlists(id) on delete cascade;
+alter table public.playlist_items add column if not exists song_id text;
+alter table public.playlist_items add column if not exists position integer default 0;
+alter table public.playlist_items add column if not exists added_at bigint default (extract(epoch from now()) * 1000)::bigint;
+alter table public.playlist_items add column if not exists user_id uuid references auth.users on delete cascade;
+alter table public.playlist_items add column if not exists created_at timestamptz default now();
+
+-- Enable RLS on playlist_items
+alter table public.playlist_items enable row level security;
+
+-- Playlist Items: Viewable if playlist is viewable
+drop policy if exists "Playlist items are viewable by everyone who can view the playlist" on public.playlist_items;
+create policy "Playlist items are viewable by everyone who can view the playlist"
+  on public.playlist_items for select
+  using (
+    auth.uid() = user_id
+    or user_id is null
+    or exists (
+      select 1 from public.playlists p
+      where p.id = playlist_id
+      and (p.is_public = true or p.user_id = auth.uid() or p.user_id is null)
+    )
+    or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- Playlist Items: Insertable by playlist owner or item owner
+drop policy if exists "Users can insert playlist items" on public.playlist_items;
+create policy "Users can insert playlist items"
+  on public.playlist_items for insert
+  with check (
+    auth.role() = 'authenticated'
+    and (
+      auth.uid() = user_id
+      or user_id is null
+      or exists (
+        select 1 from public.playlists p
+        where p.id = playlist_id
+        and (p.user_id = auth.uid() or p.user_id is null)
+      )
+      or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+    )
+  );
+
+-- Playlist Items: Updatable by owner
+drop policy if exists "Users can update playlist items" on public.playlist_items;
+create policy "Users can update playlist items"
+  on public.playlist_items for update
+  using (
+    auth.uid() = user_id
+    or user_id is null
+    or exists (
+      select 1 from public.playlists p
+      where p.id = playlist_id
+      and (p.user_id = auth.uid() or p.user_id is null)
+    )
+    or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  );
+
+-- Playlist Items: Deletable by owner
+drop policy if exists "Users can delete playlist items" on public.playlist_items;
+create policy "Users can delete playlist items"
+  on public.playlist_items for delete
+  using (
+    auth.uid() = user_id
+    or user_id is null
+    or exists (
+      select 1 from public.playlists p
+      where p.id = playlist_id
+      and (p.user_id = auth.uid() or p.user_id is null)
+    )
+    or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  );
+
+
+-- 5. USER_SETTINGS TABLE (Favorites, Recently Played, Settings, Recent Searches)
 create table if not exists public.user_settings (
   user_id uuid references auth.users on delete cascade primary key,
   favorites jsonb default '[]'::jsonb,

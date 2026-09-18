@@ -4,6 +4,7 @@ import { storage } from '../services/storage';
 import { useAuth } from './AuthContext';
 import {
   isSupabaseConfigured,
+  getSupabaseClient,
   fetchSongsFromCloud,
   fetchPlaylistsFromCloud,
   fetchUserSettingsFromCloud,
@@ -208,12 +209,12 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (cloudSongs && cloudSongs.length > 0) {
           // Cloud songs exist, merge with local cache
           const songMap = new Map<string, Song>();
-          cloudSongs.forEach((s) => songMap.set(s.id, s));
+          cloudSongs.forEach((s: Song) => songMap.set(s.id, s));
 
           // If user favorited songs in user_data, apply favorites
           if (cloudUserData?.favorites && cloudUserData.favorites.length > 0) {
             const favSet = new Set(cloudUserData.favorites);
-            songMap.forEach((s) => {
+            songMap.forEach((s: Song) => {
               if (favSet.has(s.id)) {
                 s.isFavorite = true;
               }
@@ -222,7 +223,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
           // If there are local songs not yet on cloud and user is authenticated, upload them
           if (user?.id) {
-            songs.forEach((s) => {
+            songs.forEach((s: Song) => {
               if (!songMap.has(s.id)) {
                 songMap.set(s.id, s);
                 upsertSongToCloud(s, user.id).catch(console.warn);
@@ -238,27 +239,39 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
           bulkSyncToCloud(songs, [], user?.id).catch(console.warn);
         }
 
-        // 2. Process Playlists
-        let activePlaylists = playlists;
-        if (cloudPlaylists && cloudPlaylists.length > 0) {
-          const playlistMap = new Map<string, Playlist>();
-          cloudPlaylists.forEach((p) => playlistMap.set(p.id, p));
-
-          if (user?.id) {
-            playlists.forEach((p) => {
-              if (!playlistMap.has(p.id)) {
-                playlistMap.set(p.id, p);
-                upsertPlaylistToCloud(p, user.id).catch(console.warn);
-              }
-            });
+        // 2. Process Playlists (Supabase is authoritative source of truth)
+        if (cloudPlaylists !== null) {
+          if (cloudPlaylists.length > 0) {
+            // Check if user created any playlists while offline in localStorage
+            if (user?.id) {
+              const cloudIds = new Set(cloudPlaylists.map((p: Playlist) => p.id));
+              playlists.forEach((localPl: Playlist) => {
+                if (
+                  !cloudIds.has(localPl.id) &&
+                  localPl.userId === user.id &&
+                  !localPl.isSystem
+                ) {
+                  // Push un-synced offline playlist
+                  upsertPlaylistToCloud(localPl, user.id).then((ok) => {
+                    if (!ok) console.error('Supabase: Failed to migrate offline playlist to cloud:', localPl.id);
+                  }).catch((err) => console.error('Supabase: Offline playlist migration error:', err));
+                  cloudPlaylists.push(localPl);
+                }
+              });
+            }
+            setPlaylists(cloudPlaylists);
+            storage.savePlaylists(cloudPlaylists);
+          } else if (cloudPlaylists.length === 0) {
+            // Cloud is empty - if there are user playlists, upload them
+            if (playlists.length > 0 && user?.id) {
+              playlists.forEach((p: Playlist) => {
+                upsertPlaylistToCloud(p, user.id).then((ok) => {
+                  if (!ok) console.error('Supabase: Failed to seed playlist to cloud:', p.id);
+                }).catch((err) => console.error('Supabase: Playlist seed error:', err));
+              });
+            }
+            setPlaylists(playlists);
           }
-
-          activePlaylists = Array.from(playlistMap.values());
-          setPlaylists(activePlaylists);
-          storage.savePlaylists(activePlaylists);
-        } else if (cloudPlaylists && cloudPlaylists.length === 0 && playlists.length > 0) {
-          // Cloud playlists table is empty - automatically seed from local playlists
-          bulkSyncToCloud([], playlists, user?.id).catch(console.warn);
         }
 
         // 3. Process User Data (favorites, recently played, settings, searches)
@@ -316,6 +329,69 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       syncWithCloud(false);
     }
   }, [user?.id, isAuthLoading, syncWithCloud]);
+
+  // Cross-device Realtime & Tab Focus synchronization
+  useEffect(() => {
+    const client = getSupabaseClient();
+    if (!client) return;
+
+    // 1. Subscribe to Realtime postgres_changes on playlists and playlist_items
+    let channel: any = null;
+    try {
+      channel = client
+        .channel('public:cross-device-playlists')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'playlists' },
+          () => {
+            fetchPlaylistsFromCloud().then((fresh) => {
+              if (fresh !== null) {
+                setPlaylists(fresh);
+                storage.savePlaylists(fresh);
+              }
+            }).catch((err) => console.error('Supabase: Realtime playlists sync failed:', err));
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'playlist_items' },
+          () => {
+            fetchPlaylistsFromCloud().then((fresh) => {
+              if (fresh !== null) {
+                setPlaylists(fresh);
+                storage.savePlaylists(fresh);
+              }
+            }).catch((err) => console.error('Supabase: Realtime playlist_items sync failed:', err));
+          }
+        )
+        .subscribe();
+    } catch (e) {
+      console.warn('Supabase: Realtime channel init note:', e);
+    }
+
+    // 2. Tab focus & visibility sync (ensures instant consistency when switching between Preview & Production tabs)
+    const handleFocusSync = () => {
+      if (document.visibilityState === 'visible') {
+        fetchPlaylistsFromCloud().then((fresh) => {
+          if (fresh !== null) {
+            setPlaylists(fresh);
+            storage.savePlaylists(fresh);
+          }
+        }).catch((err) => console.error('Supabase: Tab focus playlist sync error:', err));
+      }
+    };
+
+    window.addEventListener('focus', handleFocusSync);
+    document.addEventListener('visibilitychange', handleFocusSync);
+
+    return () => {
+      if (channel) {
+        client.removeChannel(channel);
+      }
+      window.removeEventListener('focus', handleFocusSync);
+      document.removeEventListener('visibilitychange', handleFocusSync);
+    };
+  }, []);
 
   const setActivePage = useCallback((page: ActivePage, playlistId: string | null = null) => {
     setActivePageInternal(page);
@@ -570,7 +646,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         'You';
 
       const newPl: Playlist = {
-        id: `pl-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+        id: `pl-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
         name: name.trim() || 'Untitled Playlist',
         description: description?.trim() || '',
         songIds: [],
@@ -582,8 +658,16 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       };
       setPlaylists((prev) => [newPl, ...prev]);
 
-      // Automatic Supabase INSERT
-      upsertPlaylistToCloud(newPl, user?.id).catch(console.warn);
+      // Automatic Supabase INSERT (write to public.playlists & public.playlist_items)
+      upsertPlaylistToCloud(newPl, user?.id)
+        .then((success) => {
+          if (!success) {
+            console.error('Supabase: Failed to write newly created playlist to cloud:', newPl.id);
+          }
+        })
+        .catch((err) => {
+          console.error('Supabase: Playlist creation exception:', err);
+        });
 
       addToast('Playlist Created', `"${newPl.name}" created.`, 'success');
       return newPl;
@@ -604,7 +688,15 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (pl.id === id) {
             const updated = { ...pl, ...updates, updatedAt: Date.now() };
             // Automatic Supabase UPDATE
-            upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
+            upsertPlaylistToCloud(updated, user?.id)
+              .then((success) => {
+                if (!success) {
+                  console.error('Supabase: Failed to update playlist on cloud:', updated.id);
+                }
+              })
+              .catch((err) => {
+                console.error('Supabase: Playlist update exception:', err);
+              });
             return updated;
           }
           return pl;
@@ -625,8 +717,16 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       setPlaylists((prev) => prev.filter((p) => p.id !== id));
 
-      // Automatic Supabase DELETE
-      deletePlaylistFromCloud(id).catch(console.warn);
+      // Automatic Supabase DELETE (removes from public.playlist_items and public.playlists)
+      deletePlaylistFromCloud(id)
+        .then((success) => {
+          if (!success) {
+            console.error('Supabase: Failed to delete playlist from cloud:', id);
+          }
+        })
+        .catch((err) => {
+          console.error('Supabase: Playlist delete exception:', err);
+        });
 
       if (selectedPlaylistId === id) {
         setActivePage('playlists');
@@ -658,7 +758,15 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
               updatedAt: Date.now(),
             };
             // Automatic Supabase UPDATE
-            upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
+            upsertPlaylistToCloud(updated, user?.id)
+              .then((success) => {
+                if (!success) {
+                  console.error('Supabase: Failed to sync playlist addition to cloud:', updated.id);
+                }
+              })
+              .catch((err) => {
+                console.error('Supabase: Add song to playlist exception:', err);
+              });
             return updated;
           }
           return pl;
@@ -686,7 +794,15 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
               updatedAt: Date.now(),
             };
             // Automatic Supabase UPDATE
-            upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
+            upsertPlaylistToCloud(updated, user?.id)
+              .then((success) => {
+                if (!success) {
+                  console.error('Supabase: Failed to sync playlist item removal to cloud:', updated.id);
+                }
+              })
+              .catch((err) => {
+                console.error('Supabase: Remove song from playlist exception:', err);
+              });
             return updated;
           }
           return pl;
@@ -717,7 +833,15 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
               updatedAt: Date.now(),
             };
             // Automatic Supabase UPDATE
-            upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
+            upsertPlaylistToCloud(updated, user?.id)
+              .then((success) => {
+                if (!success) {
+                  console.error('Supabase: Failed to sync reordered playlist to cloud:', updated.id);
+                }
+              })
+              .catch((err) => {
+                console.error('Supabase: Reorder playlist songs exception:', err);
+              });
             return updated;
           }
           return pl;

@@ -2,8 +2,16 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Song, Playlist, UserSettings, UserProfile } from '../types';
 
 // Read Vite client environment variables (clean surrounding quotes/whitespace)
-const rawUrl = import.meta.env.VITE_SUPABASE_URL;
-const rawKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const rawUrl =
+  import.meta.env.VITE_SUPABASE_URL ||
+  import.meta.env.VITE_PUBLIC_SUPABASE_URL ||
+  '';
+const rawKey =
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
+  import.meta.env.VITE_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+  import.meta.env.VITE_PUBLIC_SUPABASE_ANON_KEY ||
+  '';
 
 const supabaseUrl = rawUrl ? String(rawUrl).trim().replace(/^["']|["']$/g, '') : '';
 const supabasePublishableKey = rawKey ? String(rawKey).trim().replace(/^["']|["']$/g, '') : '';
@@ -161,21 +169,38 @@ export async function fetchSongsFromCloud(): Promise<Song[] | null> {
   }
 }
 
-export async function fetchPlaylistsFromCloud(): Promise<Playlist[] | null> {
+export async function upsertSongToCloud(song: Song, userId?: string): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return null;
+  if (!client) return false;
 
   try {
-    const { data, error } = await client.from('playlists').select('*').order('updated_at', { ascending: false });
+    const row = formatSongForSupabase(song, userId);
+    const { error } = await client.from('songs').upsert(row, { onConflict: 'id' });
     if (error) {
-      console.warn('Supabase: Error fetching playlists:', error.message);
-      return null;
+      console.error('Supabase: Error upserting song:', error.message, error.details);
+      return false;
     }
-    if (!data) return [];
-    return data.map(parsePlaylistFromSupabase);
+    return true;
   } catch (err) {
-    console.warn('Supabase: Network/API error fetching playlists:', err);
-    return null;
+    console.error('Supabase: Error saving song to cloud:', err);
+    return false;
+  }
+}
+
+export async function deleteSongFromCloud(songId: string): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client) return false;
+
+  try {
+    const { error } = await client.from('songs').delete().eq('id', songId);
+    if (error) {
+      console.error('Supabase: Error deleting song:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('Supabase: Error removing song from cloud:', err);
+    return false;
   }
 }
 
@@ -255,72 +280,216 @@ export async function fetchUserSettingsFromCloud(userId: string): Promise<{
 // Backward-compatible alias
 export const fetchUserDataFromCloud = fetchUserSettingsFromCloud;
 
-export async function upsertSongToCloud(song: Song, userId?: string): Promise<boolean> {
+export async function fetchPlaylistsFromCloud(): Promise<Playlist[] | null> {
   const client = getSupabaseClient();
-  if (!client) return false;
-
-  try {
-    const row = formatSongForSupabase(song, userId);
-    const { error } = await client.from('songs').upsert(row, { onConflict: 'id' });
-    if (error) {
-      console.warn('Supabase: Error upserting song:', error.message, error.details);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.warn('Supabase: Error saving song to cloud:', err);
-    return false;
+  if (!client) {
+    console.error('Supabase: Supabase client is not configured or offline.');
+    return null;
   }
-}
-
-export async function deleteSongFromCloud(songId: string): Promise<boolean> {
-  const client = getSupabaseClient();
-  if (!client) return false;
 
   try {
-    const { error } = await client.from('songs').delete().eq('id', songId);
-    if (error) {
-      console.warn('Supabase: Error deleting song:', error.message);
-      return false;
+    const { data: playlistsData, error: playlistsError } = await client
+      .from('playlists')
+      .select('*')
+      .order('updated_at', { ascending: false });
+
+    if (playlistsError) {
+      console.error('Supabase: Error fetching playlists from public.playlists:', playlistsError.message, playlistsError.details || playlistsError);
+      return null;
     }
-    return true;
-  } catch (err) {
-    console.warn('Supabase: Error removing song from cloud:', err);
-    return false;
+
+    if (!playlistsData) return [];
+
+    // Fetch normalized playlist items from public.playlist_items
+    const itemsByPlaylist: Record<string, { songId: string; position: number; addedAt: number }[]> = {};
+    try {
+      const { data: itemsData, error: itemsError } = await client
+        .from('playlist_items')
+        .select('*')
+        .order('position', { ascending: true })
+        .order('added_at', { ascending: true });
+
+      if (itemsError) {
+        console.warn('Supabase: Notice querying playlist_items (falling back to playlist.song_ids):', itemsError.message);
+      } else if (itemsData && Array.isArray(itemsData)) {
+        itemsData.forEach((item: any) => {
+          const plId = String(item.playlist_id);
+          const sId = String(item.song_id);
+          if (plId && sId) {
+            if (!itemsByPlaylist[plId]) itemsByPlaylist[plId] = [];
+            itemsByPlaylist[plId].push({
+              songId: sId,
+              position: typeof item.position === 'number' ? item.position : 0,
+              addedAt: Number(item.added_at) || Date.now(),
+            });
+          }
+        });
+      }
+    } catch (itemsErr) {
+      console.warn('Supabase: Exception querying playlist_items:', itemsErr);
+    }
+
+    return playlistsData.map((row: any) => {
+      const pl = parsePlaylistFromSupabase(row);
+      // If playlist_items has entries for this playlist, use ordered track IDs
+      if (itemsByPlaylist[pl.id] && itemsByPlaylist[pl.id].length > 0) {
+        const sorted = [...itemsByPlaylist[pl.id]].sort(
+          (a, b) => a.position - b.position || a.addedAt - b.addedAt
+        );
+        pl.songIds = sorted.map((item) => item.songId);
+      }
+      return pl;
+    });
+  } catch (err: any) {
+    console.error('Supabase: Network/API exception fetching playlists:', err?.message || err);
+    return null;
   }
 }
 
 export async function upsertPlaylistToCloud(playlist: Playlist, userId?: string): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  if (!client) {
+    console.error('Supabase: Cannot upsert playlist - client not configured.');
+    return false;
+  }
 
   try {
     const row = formatPlaylistForSupabase(playlist, userId);
-    const { error } = await client.from('playlists').upsert(row, { onConflict: 'id' });
-    if (error) {
-      console.warn('Supabase: Error upserting playlist:', error.message, error.details);
+    
+    // 1. Upsert playlist in public.playlists
+    const { error: plError } = await client.from('playlists').upsert(row, { onConflict: 'id' });
+    if (plError) {
+      console.error('Supabase: Error upserting playlist to public.playlists:', plError.message, plError.details || plError);
       return false;
     }
+
+    // 2. Synchronize track items in public.playlist_items
+    try {
+      // Clear existing playlist items for this playlist
+      const { error: delError } = await client
+        .from('playlist_items')
+        .delete()
+        .eq('playlist_id', playlist.id);
+
+      if (delError) {
+        console.warn('Supabase: Note while clearing old playlist_items for playlist:', playlist.id, delError.message);
+      }
+
+      // Insert fresh playlist items
+      if (Array.isArray(playlist.songIds) && playlist.songIds.length > 0) {
+        const itemRows = playlist.songIds.map((songId, index) => ({
+          id: `${playlist.id}_${songId}_${index}`,
+          playlist_id: playlist.id,
+          song_id: songId,
+          position: index,
+          added_at: Date.now(),
+          user_id: row.user_id,
+        }));
+
+        const { error: itemsError } = await client
+          .from('playlist_items')
+          .upsert(itemRows, { onConflict: 'id' });
+
+        if (itemsError) {
+          console.warn('Supabase: Warning upserting playlist_items:', itemsError.message, itemsError.details || itemsError);
+        }
+      }
+    } catch (itemsErr) {
+      console.warn('Supabase: Exception syncing playlist_items:', itemsErr);
+    }
+
     return true;
-  } catch (err) {
-    console.warn('Supabase: Error saving playlist to cloud:', err);
+  } catch (err: any) {
+    console.error('Supabase: Exception saving playlist to cloud:', err?.message || err);
     return false;
   }
 }
 
 export async function deletePlaylistFromCloud(playlistId: string): Promise<boolean> {
   const client = getSupabaseClient();
+  if (!client) {
+    console.error('Supabase: Cannot delete playlist - client not configured.');
+    return false;
+  }
+
+  try {
+    // Delete playlist items first
+    try {
+      const { error: itemsError } = await client
+        .from('playlist_items')
+        .delete()
+        .eq('playlist_id', playlistId);
+      if (itemsError) {
+        console.warn('Supabase: Note on deleting playlist_items for playlist:', playlistId, itemsError.message);
+      }
+    } catch (itemErr) {
+      console.warn('Supabase: Exception deleting playlist_items:', itemErr);
+    }
+
+    // Delete playlist from public.playlists
+    const { error: plError } = await client.from('playlists').delete().eq('id', playlistId);
+    if (plError) {
+      console.error('Supabase: Error deleting playlist from public.playlists:', plError.message, plError.details || plError);
+      return false;
+    }
+
+    return true;
+  } catch (err: any) {
+    console.error('Supabase: Exception removing playlist from cloud:', err?.message || err);
+    return false;
+  }
+}
+
+export async function addPlaylistItemToCloud(
+  playlistId: string,
+  songId: string,
+  userId?: string,
+  position: number = 0
+): Promise<boolean> {
+  const client = getSupabaseClient();
   if (!client) return false;
 
   try {
-    const { error } = await client.from('playlists').delete().eq('id', playlistId);
+    const itemId = `${playlistId}_${songId}_${Date.now()}`;
+    const { error } = await client.from('playlist_items').upsert(
+      {
+        id: itemId,
+        playlist_id: playlistId,
+        song_id: songId,
+        position,
+        added_at: Date.now(),
+        user_id: userId || null,
+      },
+      { onConflict: 'id' }
+    );
     if (error) {
-      console.warn('Supabase: Error deleting playlist:', error.message);
+      console.warn('Supabase: Warning inserting playlist_item:', error.message);
       return false;
     }
     return true;
-  } catch (err) {
-    console.warn('Supabase: Error removing playlist from cloud:', err);
+  } catch (err: any) {
+    console.warn('Supabase: Exception adding playlist_item:', err);
+    return false;
+  }
+}
+
+export async function removePlaylistItemFromCloud(playlistId: string, songId: string): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client) return false;
+
+  try {
+    const { error } = await client
+      .from('playlist_items')
+      .delete()
+      .eq('playlist_id', playlistId)
+      .eq('song_id', songId);
+    if (error) {
+      console.warn('Supabase: Warning removing playlist_item:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    console.warn('Supabase: Exception deleting playlist_item:', err);
     return false;
   }
 }
@@ -382,11 +551,9 @@ export async function bulkSyncToCloud(
     }
 
     if (playlists.length > 0) {
-      const playlistRows = playlists.map((p) => formatPlaylistForSupabase(p, userId));
       promises.push(
         (async () => {
-          const { error } = await client.from('playlists').upsert(playlistRows, { onConflict: 'id' });
-          if (error) console.warn('Supabase: Bulk sync playlists error:', error.message);
+          await Promise.all(playlists.map((p) => upsertPlaylistToCloud(p, userId)));
         })()
       );
     }
