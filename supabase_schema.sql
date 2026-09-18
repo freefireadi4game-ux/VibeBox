@@ -241,57 +241,59 @@ create policy "Users can delete only their own playlists"
   );
 
 
--- 4. USER_DATA TABLE (Favorites, Recently Played, Settings, Recent Searches)
-create table if not exists public.user_data (
+-- 4. USER_SETTINGS TABLE (Favorites, Recently Played, Settings, Recent Searches)
+create table if not exists public.user_settings (
   user_id uuid references auth.users on delete cascade primary key,
   favorites jsonb default '[]'::jsonb,
   recently_played jsonb default '[]'::jsonb,
   settings jsonb default '{}'::jsonb,
   recent_searches jsonb default '[]'::jsonb,
+  theme text default 'graphite',
   updated_at timestamptz default now()
 );
 
--- Ensure all columns exist on user_data table
-alter table public.user_data add column if not exists favorites jsonb default '[]'::jsonb;
-alter table public.user_data add column if not exists recently_played jsonb default '[]'::jsonb;
-alter table public.user_data add column if not exists settings jsonb default '{}'::jsonb;
-alter table public.user_data add column if not exists recent_searches jsonb default '[]'::jsonb;
-alter table public.user_data add column if not exists updated_at timestamptz default now();
+-- Ensure all columns exist on user_settings table
+alter table public.user_settings add column if not exists favorites jsonb default '[]'::jsonb;
+alter table public.user_settings add column if not exists recently_played jsonb default '[]'::jsonb;
+alter table public.user_settings add column if not exists settings jsonb default '{}'::jsonb;
+alter table public.user_settings add column if not exists recent_searches jsonb default '[]'::jsonb;
+alter table public.user_settings add column if not exists theme text default 'graphite';
+alter table public.user_settings add column if not exists updated_at timestamptz default now();
 
--- Enable RLS on user_data
-alter table public.user_data enable row level security;
+-- Enable RLS on user_settings
+alter table public.user_settings enable row level security;
 
--- User Data: Users can read ONLY their own user_data (Admins can read all)
-drop policy if exists "Users can view only their own user_data" on public.user_data;
-create policy "Users can view only their own user_data"
-  on public.user_data for select
+-- User Settings: Users can read ONLY their own user_settings (Admins can read all)
+drop policy if exists "Users can view only their own user_settings" on public.user_settings;
+create policy "Users can view only their own user_settings"
+  on public.user_settings for select
   using (
     auth.uid() = user_id 
     or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
   );
 
--- User Data: Users can insert/upsert ONLY their own user_data (Admins can manage all)
-drop policy if exists "Users can insert only their own user_data" on public.user_data;
-create policy "Users can insert only their own user_data"
-  on public.user_data for insert
+-- User Settings: Users can insert/upsert ONLY their own user_settings (Admins can manage all)
+drop policy if exists "Users can insert only their own user_settings" on public.user_settings;
+create policy "Users can insert only their own user_settings"
+  on public.user_settings for insert
   with check (
     auth.uid() = user_id 
     or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
   );
 
--- User Data: Users can update ONLY their own user_data (Admins can manage all)
-drop policy if exists "Users can update only their own user_data" on public.user_data;
-create policy "Users can update only their own user_data"
-  on public.user_data for update
+-- User Settings: Users can update ONLY their own user_settings (Admins can manage all)
+drop policy if exists "Users can update only their own user_settings" on public.user_settings;
+create policy "Users can update only their own user_settings"
+  on public.user_settings for update
   using (
     auth.uid() = user_id 
     or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
   );
 
--- User Data: Users can delete ONLY their own user_data (Admins can delete any)
-drop policy if exists "Users can delete only their own user_data" on public.user_data;
-create policy "Users can delete only their own user_data"
-  on public.user_data for delete
+-- User Settings: Users can delete ONLY their own user_settings (Admins can delete any)
+drop policy if exists "Users can delete only their own user_settings" on public.user_settings;
+create policy "Users can delete only their own user_settings"
+  on public.user_settings for delete
   using (
     auth.uid() = user_id 
     or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')

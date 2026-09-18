@@ -6,12 +6,12 @@ import {
   isSupabaseConfigured,
   fetchSongsFromCloud,
   fetchPlaylistsFromCloud,
-  fetchUserDataFromCloud,
+  fetchUserSettingsFromCloud,
   upsertSongToCloud,
   deleteSongFromCloud,
   upsertPlaylistToCloud,
   deletePlaylistFromCloud,
-  upsertUserDataToCloud,
+  upsertUserSettingsToCloud,
   bulkSyncToCloud,
 } from '../services/supabase';
 
@@ -188,7 +188,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       setCloudSyncStatus('syncing');
       try {
-        const fetchUserDataPromise = user?.id ? fetchUserDataFromCloud(user.id) : Promise.resolve(null);
+        const fetchUserDataPromise = user?.id ? fetchUserSettingsFromCloud(user.id) : Promise.resolve(null);
         const [cloudSongs, cloudPlaylists, cloudUserData] = await Promise.all([
           fetchSongsFromCloud(),
           fetchPlaylistsFromCloud(),
@@ -280,9 +280,9 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
               });
             }
           } else {
-            // First time user_data row init for this user
+            // First time user_settings row init for this user
             const currentFavIds = activeSongs.filter((s) => s.isFavorite).map((s) => s.id);
-            upsertUserDataToCloud(user.id, {
+            upsertUserSettingsToCloud(user.id, {
               favorites: currentFavIds,
               recentlyPlayed: recentlyPlayedIds,
               settings,
@@ -330,7 +330,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setSettings((prev) => {
         const merged = { ...prev, ...newSettings };
         if (user?.id) {
-          upsertUserDataToCloud(user.id, { settings: merged }).catch(console.warn);
+          upsertUserSettingsToCloud(user.id, { settings: merged }).catch(console.warn);
         }
         return merged;
       });
@@ -345,7 +345,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setRecentSearches((prev) => {
         const next = [clean, ...prev.filter((item) => item.toLowerCase() !== clean.toLowerCase())].slice(0, 10);
         if (user?.id) {
-          upsertUserDataToCloud(user.id, { recentSearches: next }).catch(console.warn);
+          upsertUserSettingsToCloud(user.id, { recentSearches: next }).catch(console.warn);
         }
         return next;
       });
@@ -356,7 +356,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const clearRecentSearches = useCallback(() => {
     setRecentSearches([]);
     if (user?.id) {
-      upsertUserDataToCloud(user.id, { recentSearches: [] }).catch(console.warn);
+      upsertUserSettingsToCloud(user.id, { recentSearches: [] }).catch(console.warn);
     }
   }, [user]);
 
@@ -458,7 +458,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setRecentlyPlayedIds((prev) => {
           const next = prev.filter((sId) => sId !== id);
           if (user?.id) {
-            upsertUserDataToCloud(user.id, { recentlyPlayed: next }).catch(console.warn);
+            upsertUserSettingsToCloud(user.id, { recentlyPlayed: next }).catch(console.warn);
           }
           return next;
         });
@@ -484,7 +484,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setRecentlyPlayedIds((prev) => {
         const next = prev.filter((sId) => sId !== id);
         if (user?.id) {
-          upsertUserDataToCloud(user.id, { recentlyPlayed: next }).catch(console.warn);
+          upsertUserSettingsToCloud(user.id, { recentlyPlayed: next }).catch(console.warn);
         }
         return next;
       });
@@ -516,10 +516,10 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
           return s;
         });
 
-        // Update user_data.favorites in Supabase
+        // Update user_settings.favorites in Supabase
         if (user?.id) {
           const favIds = nextSongs.filter((s) => s.isFavorite).map((s) => s.id);
-          upsertUserDataToCloud(user.id, { favorites: favIds }).catch(console.warn);
+          upsertUserSettingsToCloud(user.id, { favorites: favIds }).catch(console.warn);
         }
 
         return nextSongs;
@@ -550,7 +550,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setRecentlyPlayedIds((prev) => {
         const next = [id, ...prev.filter((item) => item !== id)].slice(0, 50);
         if (user?.id) {
-          upsertUserDataToCloud(user.id, { recentlyPlayed: next }).catch(console.warn);
+          upsertUserSettingsToCloud(user.id, { recentlyPlayed: next }).catch(console.warn);
         }
         return next;
       });
@@ -730,7 +730,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const clearRecentlyPlayed = useCallback(() => {
     setRecentlyPlayedIds([]);
     if (user?.id) {
-      upsertUserDataToCloud(user.id, { recentlyPlayed: [] }).catch(console.warn);
+      upsertUserSettingsToCloud(user.id, { recentlyPlayed: [] }).catch(console.warn);
     }
     addToast('History Cleared', 'Recently played tracks cleared.', 'info');
   }, [user, addToast]);

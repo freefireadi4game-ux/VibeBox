@@ -113,7 +113,7 @@ export const parsePlaylistFromSupabase = (row: any): Playlist => ({
   isPublic: row.is_public ?? row.isPublic ?? true,
 });
 
-export const formatUserDataForSupabase = (
+export const formatUserSettingsForSupabase = (
   userId: string,
   userData: {
     favorites?: string[];
@@ -128,10 +128,16 @@ export const formatUserDataForSupabase = (
   };
   if (userData.favorites !== undefined) row.favorites = userData.favorites;
   if (userData.recentlyPlayed !== undefined) row.recently_played = userData.recentlyPlayed;
-  if (userData.settings !== undefined) row.settings = userData.settings;
+  if (userData.settings !== undefined) {
+    row.settings = userData.settings;
+    if (userData.settings.theme) row.theme = userData.settings.theme;
+  }
   if (userData.recentSearches !== undefined) row.recent_searches = userData.recentSearches;
   return row;
 };
+
+// Backward-compatible alias
+export const formatUserDataForSupabase = formatUserSettingsForSupabase;
 
 /**
  * Cloud Operations with Direct PostgREST Writes
@@ -173,7 +179,7 @@ export async function fetchPlaylistsFromCloud(): Promise<Playlist[] | null> {
   }
 }
 
-export async function fetchUserDataFromCloud(userId: string): Promise<{
+export async function fetchUserSettingsFromCloud(userId: string): Promise<{
   favorites: string[];
   recentlyPlayed: string[];
   settings: Partial<UserSettings> | null;
@@ -183,30 +189,71 @@ export async function fetchUserDataFromCloud(userId: string): Promise<{
   if (!client || !userId) return null;
 
   try {
-    const { data, error } = await client
-      .from('user_data')
+    // Primary query by user_id
+    let res = await client
+      .from('user_settings')
       .select('*')
       .eq('user_id', userId)
       .maybeSingle();
 
-    if (error) {
-      console.warn('Supabase: Error fetching user_data:', error.message);
+    // Fallback if schema uses id instead of user_id
+    if (!res.data && res.error) {
+      const altRes = await client
+        .from('user_settings')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+      if (altRes.data) {
+        res = altRes;
+      }
+    }
+
+    if (res.error) {
+      console.warn('Supabase: Error fetching user_settings:', res.error.message);
       return null;
     }
 
-    if (!data) return null;
+    if (!res.data) return null;
+    const data = res.data;
+
+    let parsedSettings: Partial<UserSettings> | null = null;
+    if (typeof data.settings === 'object' && data.settings !== null && !Array.isArray(data.settings)) {
+      parsedSettings = data.settings;
+    } else if (typeof data.settings === 'string') {
+      try {
+        parsedSettings = JSON.parse(data.settings);
+      } catch {
+        parsedSettings = null;
+      }
+    }
+
+    if (!parsedSettings) {
+      parsedSettings = {};
+    }
+    if (data.theme && !parsedSettings.theme) {
+      parsedSettings.theme = data.theme;
+    }
+    if (data.default_volume !== undefined && parsedSettings.defaultVolume === undefined) {
+      parsedSettings.defaultVolume = Number(data.default_volume);
+    }
+    if (data.autoplay_next !== undefined && parsedSettings.autoplayNext === undefined) {
+      parsedSettings.autoplayNext = Boolean(data.autoplay_next);
+    }
 
     return {
       favorites: Array.isArray(data.favorites) ? data.favorites : [],
       recentlyPlayed: Array.isArray(data.recently_played) ? data.recently_played : [],
-      settings: typeof data.settings === 'object' && data.settings !== null ? data.settings : null,
+      settings: Object.keys(parsedSettings).length > 0 ? parsedSettings : null,
       recentSearches: Array.isArray(data.recent_searches) ? data.recent_searches : [],
     };
   } catch (err) {
-    console.warn('Supabase: Network error fetching user_data:', err);
+    console.warn('Supabase: Network error fetching user_settings:', err);
     return null;
   }
 }
+
+// Backward-compatible alias
+export const fetchUserDataFromCloud = fetchUserSettingsFromCloud;
 
 export async function upsertSongToCloud(song: Song, userId?: string): Promise<boolean> {
   const client = getSupabaseClient();
@@ -278,7 +325,7 @@ export async function deletePlaylistFromCloud(playlistId: string): Promise<boole
   }
 }
 
-export async function upsertUserDataToCloud(
+export async function upsertUserSettingsToCloud(
   userId: string,
   data: {
     favorites?: string[];
@@ -291,18 +338,21 @@ export async function upsertUserDataToCloud(
   if (!client || !userId) return false;
 
   try {
-    const row = formatUserDataForSupabase(userId, data);
-    const { error } = await client.from('user_data').upsert(row, { onConflict: 'user_id' });
+    const row = formatUserSettingsForSupabase(userId, data);
+    const { error } = await client.from('user_settings').upsert(row, { onConflict: 'user_id' });
     if (error) {
-      console.warn('Supabase: Error upserting user_data:', error.message, error.details);
+      console.warn('Supabase: Error upserting user_settings:', error.message, error.details);
       return false;
     }
     return true;
   } catch (err) {
-    console.warn('Supabase: Network error saving user_data:', err);
+    console.warn('Supabase: Network error saving user_settings:', err);
     return false;
   }
 }
+
+// Backward-compatible alias
+export const upsertUserDataToCloud = upsertUserSettingsToCloud;
 
 export async function bulkSyncToCloud(
   songs: Song[],
@@ -342,11 +392,11 @@ export async function bulkSyncToCloud(
     }
 
     if (userId && userData) {
-      const userRow = formatUserDataForSupabase(userId, userData);
+      const userRow = formatUserSettingsForSupabase(userId, userData);
       promises.push(
         (async () => {
-          const { error } = await client.from('user_data').upsert(userRow, { onConflict: 'user_id' });
-          if (error) console.warn('Supabase: Bulk sync user_data error:', error.message);
+          const { error } = await client.from('user_settings').upsert(userRow, { onConflict: 'user_id' });
+          if (error) console.warn('Supabase: Bulk sync user_settings error:', error.message);
         })()
       );
     }
