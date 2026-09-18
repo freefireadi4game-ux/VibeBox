@@ -11,8 +11,9 @@ export const YouTubeHost: React.FC = () => {
       className={`fixed transition-all duration-300 ${
         isVideoVisible
           ? 'bottom-24 right-4 md:bottom-28 md:right-8 w-72 sm:w-80 md:w-96 aspect-video bg-[#0b0e1d] rounded-2xl overflow-hidden shadow-2xl shadow-indigo-950/40 border border-white/15 backdrop-blur-xl opacity-100 pointer-events-auto z-40'
-          : 'bottom-0 right-0 w-2 h-2 opacity-[0.02] pointer-events-none overflow-hidden z-0'
+          : 'fixed -bottom-[600px] right-0 w-80 h-48 opacity-0 pointer-events-none z-[-1]'
       }`}
+      aria-hidden={!isVideoVisible}
     >
       {isVideoVisible && (
         <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5 bg-[#0e1224]/80 backdrop-blur-md px-2 py-1 rounded-lg border border-white/15">

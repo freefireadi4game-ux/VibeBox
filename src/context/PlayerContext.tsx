@@ -51,9 +51,6 @@ const PlayerContext = createContext<PlayerContextType | null>(null);
 
 const DEFAULT_PREFS = storage.getPlayerPrefs();
 
-// Silent audio base64 data URI to keep mobile Media Session & Dynamic Island / Notification Pill active in background
-const SILENT_AUDIO_URI = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
-
 export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -75,9 +72,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [isVideoVisible, setIsVideoVisible] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // HTML5 Audio Keep-Alive for Android / iOS background audio focus and Dynamic Island persistence
-  const keepAliveAudioRef = useRef<HTMLAudioElement | null>(null);
-
   // Synchronized refs to avoid stale closure issues in YouTube event listeners
   const playerRef = useRef<any>(null);
   const playerReadyRef = useRef<boolean>(false);
@@ -90,44 +84,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const isPlayingRef = useRef<boolean>(false);
   const isSkippingRef = useRef<boolean>(false);
   const intendedPlayingRef = useRef<boolean>(false);
-
-  // Initialize keep-alive audio element once
-  useEffect(() => {
-    try {
-      const audio = new Audio(SILENT_AUDIO_URI);
-      audio.loop = true;
-      audio.volume = 0.05;
-      audio.preload = 'auto';
-      keepAliveAudioRef.current = audio;
-    } catch (e) {
-      console.warn('Could not initialize keep-alive audio:', e);
-    }
-
-    return () => {
-      if (keepAliveAudioRef.current) {
-        try {
-          keepAliveAudioRef.current.pause();
-          keepAliveAudioRef.current.src = '';
-        } catch {}
-      }
-    };
-  }, []);
-
-  const startKeepAlive = useCallback(() => {
-    if (keepAliveAudioRef.current) {
-      keepAliveAudioRef.current.play().catch(() => {
-        // May wait for first gesture, which is normal
-      });
-    }
-  }, []);
-
-  const stopKeepAlive = useCallback(() => {
-    if (keepAliveAudioRef.current) {
-      try {
-        keepAliveAudioRef.current.pause();
-      } catch {}
-    }
-  }, []);
 
   // Keep refs in sync
   currentSongRef.current = currentSong;
@@ -184,7 +140,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setCurrentRepeatIteration(1);
     currentRepeatIterationRef.current = 1;
     intendedPlayingRef.current = true;
-    startKeepAlive();
 
     if (playerRef.current && playerReadyRef.current) {
       try {
@@ -197,7 +152,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.error('Error loading video', e);
       }
     }
-  }, [startKeepAlive]);
+  }, []);
 
   // Next song handler
   const nextSong = useCallback(() => {
@@ -364,7 +319,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               setIsLoading(false);
               setError(null);
               intendedPlayingRef.current = true;
-              startKeepAlive();
               if ('mediaSession' in navigator) {
                 try {
                   navigator.mediaSession.playbackState = 'playing';
@@ -376,31 +330,13 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               }
             } else if (state === 2) {
               // Video was paused
-              if (intendedPlayingRef.current) {
-                // If playback is intended (e.g. background suspension or resume from widget),
-                // maintain keepAlive so Android Audio Focus is not lost, and re-trigger play
-                startKeepAlive();
-                if ('mediaSession' in navigator) {
-                  try {
-                    navigator.mediaSession.playbackState = 'playing';
-                  } catch {}
-                }
-                setTimeout(() => {
-                  if (intendedPlayingRef.current && playerRef.current && playerReadyRef.current) {
-                    try {
-                      playerRef.current.playVideo();
-                    } catch {}
-                  }
-                }, 100);
-              } else {
-                setIsPlaying(false);
-                setIsLoading(false);
-                stopKeepAlive();
-                if ('mediaSession' in navigator) {
-                  try {
-                    navigator.mediaSession.playbackState = 'paused';
-                  } catch {}
-                }
+              setIsPlaying(false);
+              setIsLoading(false);
+              intendedPlayingRef.current = false;
+              if ('mediaSession' in navigator) {
+                try {
+                  navigator.mediaSession.playbackState = 'paused';
+                } catch {}
               }
             } else if (state === 3) {
               setIsLoading(true);
@@ -515,7 +451,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setCurrentRepeatIteration(1);
       currentRepeatIterationRef.current = 1;
       intendedPlayingRef.current = true;
-      startKeepAlive();
 
       if (playerRef.current && playerReadyRef.current) {
         try {
@@ -529,7 +464,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
       }
     },
-    [startKeepAlive]
+    []
   );
 
   const togglePlay = useCallback(() => {
@@ -546,7 +481,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (isPlaying) {
         intendedPlayingRef.current = false;
         playerRef.current.pauseVideo();
-        stopKeepAlive();
         setIsPlaying(false);
         if ('mediaSession' in navigator) {
           navigator.mediaSession.playbackState = 'paused';
@@ -554,7 +488,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } else {
         intendedPlayingRef.current = true;
         playerRef.current.playVideo();
-        startKeepAlive();
         setIsPlaying(true);
         if ('mediaSession' in navigator) {
           navigator.mediaSession.playbackState = 'playing';
@@ -563,7 +496,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch (e) {
       console.error('Error toggling play state', e);
     }
-  }, [currentSong, isPlaying, playSong, queue, startKeepAlive, stopKeepAlive]);
+  }, [currentSong, isPlaying, playSong, queue]);
 
   const setVolume = useCallback(
     (newVol: number) => {
@@ -790,7 +723,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     setHandler('play', () => {
       intendedPlayingRef.current = true;
-      startKeepAlive();
       if (playerRef.current && playerReadyRef.current) {
         try {
           playerRef.current.playVideo();
@@ -806,7 +738,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     setHandler('pause', () => {
       intendedPlayingRef.current = false;
-      stopKeepAlive();
       if (playerRef.current && playerReadyRef.current) {
         try {
           playerRef.current.pauseVideo();
@@ -844,7 +775,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     setHandler('stop', () => {
       intendedPlayingRef.current = false;
-      stopKeepAlive();
       if (playerRef.current && playerReadyRef.current) {
         try {
           playerRef.current.pauseVideo();
@@ -871,7 +801,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       ];
       actions.forEach((a) => setHandler(a, null));
     };
-  }, [togglePlay, prevSong, nextSong, seekTo, currentTime, duration, startKeepAlive, stopKeepAlive]);
+  }, [prevSong, nextSong, seekTo, currentTime, duration]);
 
   // MediaSession Position State sync
   useEffect(() => {
