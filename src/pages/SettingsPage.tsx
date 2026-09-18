@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Moon,
   Volume2,
@@ -20,9 +20,21 @@ import {
   RefreshCw,
   CheckCircle2,
   WifiOff,
+  User as UserIcon,
+  LogIn,
+  LogOut,
+  Edit3,
+  Save,
+  Sparkles,
+  Mail,
+  UserCheck,
+  Crown,
+  Key,
+  Lock,
 } from 'lucide-react';
 import { useLibrary } from '../context/LibraryContext';
 import { usePlayer } from '../context/PlayerContext';
+import { useAuth } from '../context/AuthContext';
 import { ConfirmationModal } from '../components/common/ConfirmationModal';
 import { PWAInstallButton } from '../components/common/PWAInstallButton';
 import { ThemeName } from '../types';
@@ -41,15 +53,52 @@ export const SettingsPage: React.FC = () => {
     cloudSyncStatus,
     isCloudConnected,
     syncWithCloud,
+    addToast,
   } = useLibrary();
 
   const { isVideoVisible, setIsVideoVisible, playbackMode, setPlaybackMode } = usePlayer();
+  const { user, profile, role, isAdmin, signOut, openAuthModal, updateProfile, isConfigured: isAuthConfigured } = useAuth();
 
   const [confirmClearHistory, setConfirmClearHistory] = useState(false);
   const [confirmClearAll, setConfirmClearAll] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importJsonText, setImportJsonText] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
+
+  // Profile Edit State
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editFullName, setEditFullName] = useState('');
+  const [editUsername, setEditUsername] = useState('');
+  const [editAvatarUrl, setEditAvatarUrl] = useState('');
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+
+  useEffect(() => {
+    if (profile) {
+      setEditFullName(profile.full_name || '');
+      setEditUsername(profile.username || '');
+      setEditAvatarUrl(profile.avatar_url || '');
+    } else if (user) {
+      setEditFullName(user.user_metadata?.full_name || '');
+      setEditUsername(user.user_metadata?.username || user.email?.split('@')[0] || '');
+      setEditAvatarUrl(user.user_metadata?.avatar_url || '');
+    }
+  }, [profile, user]);
+
+  const handleSaveProfile = async () => {
+    setIsSavingProfile(true);
+    const res = await updateProfile({
+      full_name: editFullName.trim(),
+      username: editUsername.trim(),
+      avatar_url: editAvatarUrl.trim(),
+    });
+    setIsSavingProfile(false);
+    if (res.success) {
+      setIsEditingProfile(false);
+      addToast('Profile Updated', 'Your profile in public.profiles was updated.', 'success');
+    } else {
+      addToast('Error', res.error || 'Failed to update profile.', 'error');
+    }
+  };
 
   const handleManualSync = async () => {
     setIsSyncing(true);
@@ -87,8 +136,225 @@ export const SettingsPage: React.FC = () => {
       <div className="pb-4 border-b border-white/[0.08]">
         <h2 className="text-2xl font-bold text-white tracking-tight">App Settings</h2>
         <p className="text-xs text-zinc-400 mt-1">
-          Customize your playback, theme aesthetics, and backup your personal music library.
+          Customize your playback, theme aesthetics, and manage your Supabase cloud profile.
         </p>
+      </div>
+
+      {/* 0. Account & Supabase Profile */}
+      <div className="p-6 rounded-3xl bg-white/[0.03] border border-white/[0.08] space-y-5 shadow-xl backdrop-blur-xl">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-violet-500/15 text-violet-300 border border-violet-500/20">
+              <UserIcon className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white">Supabase Account & Profile</h3>
+              <p className="text-xs text-zinc-400">
+                {user ? 'Managed via Supabase Authentication & public.profiles' : 'Sign in to access your cloud library on any device'}
+              </p>
+            </div>
+          </div>
+
+          {user ? (
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                Authenticated
+              </span>
+            </div>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-800 text-zinc-400 border border-white/10">
+              Guest Mode
+            </span>
+          )}
+        </div>
+
+        {user ? (
+          <div className="space-y-4">
+            {/* User Overview Card */}
+            <div className="p-4 rounded-2xl bg-black/40 border border-white/[0.06] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                {profile?.avatar_url || user.user_metadata?.avatar_url ? (
+                  <img
+                    src={profile?.avatar_url || user.user_metadata?.avatar_url}
+                    alt="Profile"
+                    className="w-12 h-12 rounded-2xl object-cover border border-white/20 shadow-md"
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-violet-500 text-white flex items-center justify-center font-extrabold text-base shadow-lg border border-white/20">
+                    {(profile?.full_name || profile?.username || user.email || 'U').charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-bold text-white">
+                      {profile?.full_name || profile?.username || user.email?.split('@')[0]}
+                    </h4>
+                    {profile?.username && (
+                      <span className="px-2 py-0.5 rounded-md bg-violet-500/15 text-violet-300 text-[10px] font-mono border border-violet-500/25">
+                        @{profile.username}
+                      </span>
+                    )}
+                    {isAdmin ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-extrabold uppercase tracking-wide">
+                        <Crown className="w-3 h-3 text-amber-400" />
+                        Admin Account
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[10px] font-semibold uppercase tracking-wide">
+                        <UserCheck className="w-3 h-3 text-blue-400" />
+                        Standard User
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-zinc-400 flex items-center gap-1.5 mt-0.5">
+                    <Mail className="w-3 h-3 text-zinc-500" />
+                    <span>{user.email}</span>
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 self-end sm:self-center">
+                <button
+                  onClick={() => setIsEditingProfile(!isEditingProfile)}
+                  className="px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-zinc-200 hover:text-white border border-white/[0.08] text-xs font-semibold flex items-center gap-1.5 transition-all"
+                >
+                  <Edit3 className="w-3.5 h-3.5 text-violet-400" />
+                  <span>{isEditingProfile ? 'Cancel' : 'Edit Profile'}</span>
+                </button>
+                <button
+                  onClick={async () => {
+                    await signOut();
+                    addToast('Signed Out', 'You have been logged out.', 'info');
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/25 text-xs font-semibold flex items-center gap-1.5 transition-all"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Log Out</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Role & Permissions Banner */}
+            <div className={`p-4 rounded-2xl border ${
+              isAdmin
+                ? 'bg-amber-950/20 border-amber-500/30 text-amber-200'
+                : 'bg-white/[0.02] border-white/[0.06] text-zinc-300'
+            }`}>
+              <div className="flex items-start gap-3">
+                <div className={`p-2 rounded-xl shrink-0 ${
+                  isAdmin ? 'bg-amber-500/20 text-amber-400' : 'bg-violet-500/20 text-violet-400'
+                }`}>
+                  {isAdmin ? <Crown className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <h5 className="text-xs font-bold text-white">
+                      {isAdmin ? 'Admin Privileges Active' : 'User Ownership & Security'}
+                    </h5>
+                    <span className="text-[10px] text-zinc-400 font-mono">
+                      (public.profiles.role = "{role}")
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-zinc-400 leading-relaxed">
+                    {isAdmin
+                      ? 'Full admin authorization enabled: You have unrestricted management rights across all songs, playlists, user data, and system catalogs enforced by Supabase RLS.'
+                      : 'Row-Level Security active: You can create and curate your own playlists, manage your favorites and listening history, and play all public songs.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Profile Edit Form */}
+            {isEditingProfile && (
+              <div className="p-4 rounded-2xl bg-white/[0.02] border border-violet-500/30 space-y-3 animate-in fade-in duration-150">
+                <div className="flex items-center justify-between pb-2 border-b border-white/[0.06]">
+                  <span className="text-xs font-bold text-violet-300">Edit Profile Data (public.profiles)</span>
+                  <span className="text-[10px] text-zinc-500">Live Sync to Supabase</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-zinc-400">Full Name</label>
+                    <input
+                      type="text"
+                      value={editFullName}
+                      onChange={(e) => setEditFullName(e.target.value)}
+                      placeholder="e.g. Alex Morgan"
+                      className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/[0.08] focus:border-violet-500/50 focus:outline-none text-xs text-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-zinc-400">Username</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 text-xs font-mono">@</span>
+                      <input
+                        type="text"
+                        value={editUsername}
+                        onChange={(e) => setEditUsername(e.target.value)}
+                        placeholder="vibemaster"
+                        className="w-full pl-7 pr-3 py-2 rounded-xl bg-black/40 border border-white/[0.08] focus:border-violet-500/50 focus:outline-none text-xs text-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="sm:col-span-2 space-y-1">
+                    <label className="text-[11px] font-semibold text-zinc-400">Avatar Image URL (Optional)</label>
+                    <input
+                      type="url"
+                      value={editAvatarUrl}
+                      onChange={(e) => setEditAvatarUrl(e.target.value)}
+                      placeholder="https://images.unsplash.com/..."
+                      className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/[0.08] focus:border-violet-500/50 focus:outline-none text-xs text-white font-mono text-[11px]"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    onClick={handleSaveProfile}
+                    disabled={isSavingProfile}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md transition-all disabled:opacity-50"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{isSavingProfile ? 'Saving...' : 'Save Profile'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="p-4 rounded-2xl bg-black/30 border border-white/[0.05] space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-zinc-200">
+                  Ready to sync your library across devices?
+                </p>
+                <p className="text-[11px] text-zinc-400 leading-relaxed max-w-lg">
+                  Create a free VIBEBOX account to safeguard your music library, customized playlists, favorites, and listening stats in the cloud with Supabase.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => openAuthModal('login')}
+                  className="px-4 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-zinc-200 hover:text-white border border-white/[0.08] text-xs font-semibold flex items-center gap-1.5 transition-all"
+                >
+                  <LogIn className="w-3.5 h-3.5 text-violet-400" />
+                  <span>Sign In</span>
+                </button>
+                <button
+                  onClick={() => openAuthModal('signup')}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-xs font-bold shadow-md shadow-indigo-950/60 border border-white/15 transition-all active:scale-95 flex items-center gap-1.5"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Create Account</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 1. Theme Preferences */}

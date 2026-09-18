@@ -11,6 +11,8 @@ export interface Song {
   isFavorite: boolean;
   playCount: number;
   lastPlayedAt?: number;
+  userId?: string;
+  isPublic?: boolean;
 }
 
 export interface Playlist {
@@ -22,6 +24,9 @@ export interface Playlist {
   updatedAt: number;
   isSystem?: boolean;
   coverUrl?: string;
+  userId?: string;
+  creatorName?: string;
+  isPublic?: boolean;
 }
 
 export type RepeatOption = 'off' | '1' | '2' | '3' | '5' | '10' | '20' | 'inf';
@@ -69,6 +74,18 @@ export interface ToastMessage {
   title: string;
   message?: string;
   type?: 'success' | 'info' | 'error';
+}
+
+export interface UserProfile {
+  id: string;
+  email?: string;
+  username?: string;
+  full_name?: string;
+  avatar_url?: string;
+  website?: string;
+  role?: 'admin' | 'user' | string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export type ActivePage = 'home' | 'search' | 'library' | 'playlists' | 'playlist-detail' | 'settings';

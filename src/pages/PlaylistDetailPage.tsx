@@ -28,6 +28,7 @@ export const PlaylistDetailPage: React.FC = () => {
     reorderPlaylistSongs,
     openCreatePlaylistModal,
     openAddSongModal,
+    canManagePlaylist,
   } = useLibrary();
 
   const { playSong } = usePlayer();
@@ -49,6 +50,8 @@ export const PlaylistDetailPage: React.FC = () => {
       </div>
     );
   }
+
+  const isOwnerOrAdmin = canManagePlaylist(currentPlaylist);
 
   // Get songs for this playlist in the ordered sequence
   const songMap = new Map(songs.map((s) => [s.id, s]));
@@ -100,9 +103,21 @@ export const PlaylistDetailPage: React.FC = () => {
 
         {/* Info */}
         <div className="flex-1 min-w-0 text-center sm:text-left space-y-2.5">
-          <span className="text-[11px] font-extrabold text-violet-400 uppercase tracking-widest block">
-            PLAYLIST
-          </span>
+          <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+            <span className="text-[11px] font-extrabold text-violet-400 uppercase tracking-widest">
+              PLAYLIST
+            </span>
+            {currentPlaylist.creatorName && (
+              <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/[0.08] text-zinc-300 border border-white/10 font-medium">
+                Created by {currentPlaylist.creatorName}
+              </span>
+            )}
+            {!isOwnerOrAdmin && (
+              <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/30 font-medium">
+                Public • View Only
+              </span>
+            )}
+          </div>
 
           <h1 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight break-words">
             {currentPlaylist.name}
@@ -147,21 +162,25 @@ export const PlaylistDetailPage: React.FC = () => {
             </>
           )}
 
-          <button
-            onClick={() => openCreatePlaylistModal(currentPlaylist)}
-            className="p-2.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-zinc-300 hover:text-white border border-white/[0.08] transition-colors"
-            title="Edit Playlist Details"
-          >
-            <Edit2 className="w-4 h-4" />
-          </button>
+          {isOwnerOrAdmin && (
+            <>
+              <button
+                onClick={() => openCreatePlaylistModal(currentPlaylist)}
+                className="p-2.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-zinc-300 hover:text-white border border-white/[0.08] transition-colors"
+                title="Edit Playlist Details"
+              >
+                <Edit2 className="w-4 h-4" />
+              </button>
 
-          <button
-            onClick={() => setShowDeleteConfirm(true)}
-            className="p-2.5 rounded-xl bg-white/[0.05] hover:bg-rose-500/20 text-zinc-400 hover:text-rose-400 border border-white/[0.08] transition-colors"
-            title="Delete Playlist"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                className="p-2.5 rounded-xl bg-white/[0.05] hover:bg-rose-500/20 text-zinc-400 hover:text-rose-400 border border-white/[0.08] transition-colors"
+                title="Delete Playlist"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </>
+          )}
         </div>
 
         <button
@@ -200,27 +219,29 @@ export const PlaylistDetailPage: React.FC = () => {
         <div className="space-y-1.5">
           {playlistSongs.map((song, idx) => (
             <div key={`${song.id}-${idx}`} className="group relative flex items-center gap-1">
-              {/* Up / Down reorder quick buttons */}
-              <div className="hidden group-hover:flex flex-col items-center justify-center shrink-0 pr-1">
-                {idx > 0 && (
-                  <button
-                    onClick={() => reorderPlaylistSongs(currentPlaylist.id, idx, idx - 1)}
-                    className="p-1 text-zinc-500 hover:text-white rounded hover:bg-zinc-800 transition-colors"
-                    title="Move up"
-                  >
-                    <ArrowUp className="w-3 h-3" />
-                  </button>
-                )}
-                {idx < playlistSongs.length - 1 && (
-                  <button
-                    onClick={() => reorderPlaylistSongs(currentPlaylist.id, idx, idx + 1)}
-                    className="p-1 text-zinc-500 hover:text-white rounded hover:bg-zinc-800 transition-colors"
-                    title="Move down"
-                  >
-                    <ArrowDown className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
+              {/* Up / Down reorder quick buttons (only visible if user can manage playlist) */}
+              {isOwnerOrAdmin && (
+                <div className="hidden group-hover:flex flex-col items-center justify-center shrink-0 pr-1">
+                  {idx > 0 && (
+                    <button
+                      onClick={() => reorderPlaylistSongs(currentPlaylist.id, idx, idx - 1)}
+                      className="p-1 text-zinc-500 hover:text-white rounded hover:bg-zinc-800 transition-colors"
+                      title="Move up"
+                    >
+                      <ArrowUp className="w-3 h-3" />
+                    </button>
+                  )}
+                  {idx < playlistSongs.length - 1 && (
+                    <button
+                      onClick={() => reorderPlaylistSongs(currentPlaylist.id, idx, idx + 1)}
+                      className="p-1 text-zinc-500 hover:text-white rounded hover:bg-zinc-800 transition-colors"
+                      title="Move down"
+                    >
+                      <ArrowDown className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              )}
 
               {/* Card */}
               <div className="flex-1 min-w-0">
@@ -229,7 +250,11 @@ export const PlaylistDetailPage: React.FC = () => {
                   contextList={playlistSongs}
                   variant="list"
                   index={idx}
-                  onRemoveFromPlaylist={() => removeSongFromPlaylist(currentPlaylist.id, song.id)}
+                  onRemoveFromPlaylist={
+                    isOwnerOrAdmin
+                      ? () => removeSongFromPlaylist(currentPlaylist.id, song.id)
+                      : undefined
+                  }
                 />
               </div>
             </div>

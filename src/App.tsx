@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { AuthProvider } from './context/AuthContext';
 import { LibraryProvider, useLibrary } from './context/LibraryContext';
 import { PlayerProvider, usePlayer } from './context/PlayerContext';
 import { Sidebar } from './components/layout/Sidebar';
@@ -19,6 +20,7 @@ import { AddSongModal } from './components/modals/AddSongModal';
 import { CreatePlaylistModal } from './components/modals/CreatePlaylistModal';
 import { AddToPlaylistModal } from './components/modals/AddToPlaylistModal';
 import { ShortcutsModal } from './components/modals/ShortcutsModal';
+import { AuthModal } from './components/modals/AuthModal';
 import { ToastContainer } from './components/common/Toast';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 
@@ -121,6 +123,7 @@ const AppContent: React.FC = () => {
       <AddSongModal />
       <CreatePlaylistModal />
       <AddToPlaylistModal />
+      <AuthModal />
       <ShortcutsModal
         isOpen={isShortcutsOpen}
         onClose={() => setIsShortcutsOpen(false)}
@@ -134,10 +137,12 @@ const AppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <LibraryProvider>
-      <PlayerProvider>
-        <AppContent />
-      </PlayerProvider>
-    </LibraryProvider>
+    <AuthProvider>
+      <LibraryProvider>
+        <PlayerProvider>
+          <AppContent />
+        </PlayerProvider>
+      </LibraryProvider>
+    </AuthProvider>
   );
 }

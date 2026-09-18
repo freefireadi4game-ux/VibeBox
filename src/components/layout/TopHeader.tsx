@@ -3,6 +3,7 @@ import { Search, Plus, Settings, Radio, Keyboard, Sparkles } from 'lucide-react'
 import { useLibrary } from '../../context/LibraryContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { PWAInstallButton } from '../common/PWAInstallButton';
+import { UserAccountMenu } from '../auth/UserAccountMenu';
 
 interface TopHeaderProps {
   onOpenShortcuts?: () => void;
@@ -110,6 +111,9 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenShortcuts }) => {
         >
           <Settings className="w-4 h-4" />
         </button>
+
+        {/* User Account / Auth Menu */}
+        <UserAccountMenu variant="compact" />
       </div>
     </header>
   );

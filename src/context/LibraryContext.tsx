@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import { Song, Playlist, ToastMessage, ActivePage, UserSettings } from '../types';
 import { storage } from '../services/storage';
+import { useAuth } from './AuthContext';
 import {
   isSupabaseConfigured,
   fetchSongsFromCloud,
@@ -37,6 +38,10 @@ interface LibraryContextType {
   playlistToEdit: Playlist | null;
   songToAddToPlaylist: Song | null;
   toasts: ToastMessage[];
+
+  // Ownership & Roles
+  canManagePlaylist: (playlist?: Playlist | null) => boolean;
+  canManageSong: (song?: Song | null) => boolean;
 
   // Actions
   setActivePage: (page: ActivePage, playlistId?: string | null) => void;
@@ -81,6 +86,8 @@ interface LibraryContextType {
 const LibraryContext = createContext<LibraryContextType | null>(null);
 
 export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, profile, isAdmin } = useAuth();
+
   const [songs, setSongs] = useState<Song[]>(() => storage.getSongs());
   const [playlists, setPlaylists] = useState<Playlist[]>(() => storage.getPlaylists());
   const [recentlyPlayedIds, setRecentlyPlayedIds] = useState<string[]>(() => storage.getRecentlyPlayedIds());
@@ -101,6 +108,27 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [playlistToEdit, setPlaylistToEdit] = useState<Playlist | null>(null);
   const [songToAddToPlaylist, setSongToAddToPlaylist] = useState<Song | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  // Ownership verification helpers
+  const canManagePlaylist = useCallback(
+    (playlist?: Playlist | null): boolean => {
+      if (!playlist) return false;
+      if (isAdmin) return true; // Admin has full access to all playlists
+      if (!user) return !playlist.userId; // Local mode when offline
+      return playlist.userId === user.id || !playlist.userId;
+    },
+    [isAdmin, user]
+  );
+
+  const canManageSong = useCallback(
+    (song?: Song | null): boolean => {
+      if (!song) return false;
+      if (isAdmin) return true; // Admin has full access to all songs
+      if (!user) return !song.userId;
+      return song.userId === user.id || !song.userId;
+    },
+    [isAdmin, user]
+  );
 
   // Apply theme classes to body
   useEffect(() => {
@@ -179,7 +207,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
           songs.forEach((s) => {
             if (!songMap.has(s.id)) {
               songMap.set(s.id, s);
-              upsertSongToCloud(s).catch(console.warn);
+              upsertSongToCloud(s, user?.id).catch(console.warn);
             }
           });
           finalSongs = Array.from(songMap.values());
@@ -187,7 +215,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
           storage.saveSongs(finalSongs);
         } else if (cloudSongs && cloudSongs.length === 0 && songs.length > 0) {
           // Cloud table is empty, seed cloud with local songs
-          bulkSyncToCloud(songs, playlists).catch(console.warn);
+          bulkSyncToCloud(songs, playlists, user?.id).catch(console.warn);
         }
 
         if (cloudPlaylists && cloudPlaylists.length > 0) {
@@ -196,14 +224,14 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
           playlists.forEach((p) => {
             if (!playlistMap.has(p.id)) {
               playlistMap.set(p.id, p);
-              upsertPlaylistToCloud(p).catch(console.warn);
+              upsertPlaylistToCloud(p, user?.id).catch(console.warn);
             }
           });
           finalPlaylists = Array.from(playlistMap.values());
           setPlaylists(finalPlaylists);
           storage.savePlaylists(finalPlaylists);
         } else if (cloudPlaylists && cloudPlaylists.length === 0 && playlists.length > 0) {
-          bulkSyncToCloud([], playlists).catch(console.warn);
+          bulkSyncToCloud([], playlists, user?.id).catch(console.warn);
         }
 
         setCloudSyncStatus('synced');
@@ -218,7 +246,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
       }
     },
-    [songs, playlists, addToast]
+    [songs, playlists, user, addToast]
   );
 
   // Initial cloud sync on mount
@@ -263,25 +291,31 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
           id: `song-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
           addedAt: Date.now(),
           playCount: 0,
+          userId: user?.id,
+          isPublic: true,
         };
         setSongs((prev) => [newSong, ...prev]);
         targetSong = newSong;
         addToast('Song Added', `"${newSong.title}" saved to library.`, 'success');
 
         // Cloud sync
-        upsertSongToCloud(newSong).catch(console.warn);
+        upsertSongToCloud(newSong, user?.id).catch(console.warn);
       }
 
       if (playlistId) {
         setPlaylists((prev) =>
           prev.map((pl) => {
             if (pl.id === playlistId && !pl.songIds.includes(targetSong.id)) {
+              if (!canManagePlaylist(pl)) {
+                addToast('Permission Denied', 'You cannot add tracks to playlists owned by others.', 'error');
+                return pl;
+              }
               const updatedPl = {
                 ...pl,
                 songIds: [...pl.songIds, targetSong.id],
                 updatedAt: Date.now(),
               };
-              upsertPlaylistToCloud(updatedPl).catch(console.warn);
+              upsertPlaylistToCloud(updatedPl, user?.id).catch(console.warn);
               return updatedPl;
             }
             return pl;
@@ -291,16 +325,21 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       return targetSong;
     },
-    [songs, addToast]
+    [songs, user, canManagePlaylist, addToast]
   );
 
   const updateSong = useCallback(
     (id: string, updates: Partial<Song>) => {
+      const target = songs.find((s) => s.id === id);
+      if (target && !canManageSong(target)) {
+        addToast('Permission Denied', 'Only the owner or an admin can update this track.', 'error');
+        return;
+      }
       setSongs((prev) =>
         prev.map((s) => {
           if (s.id === id) {
             const updated = { ...s, ...updates };
-            upsertSongToCloud(updated).catch(console.warn);
+            upsertSongToCloud(updated, user?.id).catch(console.warn);
             return updated;
           }
           return s;
@@ -308,12 +347,33 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       );
       addToast('Updated', 'Song information updated.', 'info');
     },
-    [addToast]
+    [songs, canManageSong, user, addToast]
   );
 
   const deleteSong = useCallback(
     (id: string) => {
       const target = songs.find((s) => s.id === id);
+      if (target && !canManageSong(target)) {
+        // Remove from user's managed playlists and recent history
+        setPlaylists((prev) =>
+          prev.map((pl) => {
+            if (canManagePlaylist(pl) && pl.songIds.includes(id)) {
+              const updated = {
+                ...pl,
+                songIds: pl.songIds.filter((sId) => sId !== id),
+                updatedAt: Date.now(),
+              };
+              upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
+              return updated;
+            }
+            return pl;
+          })
+        );
+        setRecentlyPlayedIds((prev) => prev.filter((sId) => sId !== id));
+        addToast('Removed', `"${target.title}" removed from your playlists.`, 'info');
+        return;
+      }
+
       setSongs((prev) => prev.filter((s) => s.id !== id));
       setPlaylists((prev) =>
         prev.map((pl) => {
@@ -323,7 +383,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
               songIds: pl.songIds.filter((sId) => sId !== id),
               updatedAt: Date.now(),
             };
-            upsertPlaylistToCloud(updated).catch(console.warn);
+            upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
             return updated;
           }
           return pl;
@@ -335,10 +395,10 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       deleteSongFromCloud(id).catch(console.warn);
 
       if (target) {
-        addToast('Song Removed', `"${target.title}" was removed from your library.`, 'info');
+        addToast('Song Removed', `"${target.title}" was removed from library.`, 'info');
       }
     },
-    [songs, addToast]
+    [songs, canManageSong, canManagePlaylist, user, addToast]
   );
 
   const toggleFavorite = useCallback(
@@ -351,7 +411,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
             isFav = !s.isFavorite;
             songTitle = s.title;
             const updated = { ...s, isFavorite: isFav };
-            upsertSongToCloud(updated).catch(console.warn);
+            upsertSongToCloud(updated, user?.id).catch(console.warn);
             return updated;
           }
           return s;
@@ -361,7 +421,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         addToast(isFav ? 'Added to Favorites' : 'Removed from Favorites', `"${songTitle}"`, 'success');
       }
     },
-    [addToast]
+    [user, addToast]
   );
 
   const recordPlay = useCallback((id: string) => {
@@ -370,18 +430,26 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       prev.map((s) => {
         if (s.id === id) {
           const updated = { ...s, playCount: (s.playCount || 0) + 1, lastPlayedAt: now };
-          upsertSongToCloud(updated).catch(console.warn);
+          upsertSongToCloud(updated, user?.id).catch(console.warn);
           return updated;
         }
         return s;
       })
     );
     setRecentlyPlayedIds((prev) => [id, ...prev.filter((item) => item !== id)].slice(0, 50));
-  }, []);
+  }, [user]);
 
   // Playlist operations
   const createPlaylist = useCallback(
     (name: string, description?: string): Playlist => {
+      const creatorName =
+        profile?.username ||
+        profile?.full_name ||
+        user?.user_metadata?.username ||
+        user?.user_metadata?.full_name ||
+        user?.email?.split('@')[0] ||
+        'You';
+
       const newPl: Playlist = {
         id: `pl-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
         name: name.trim() || 'Untitled Playlist',
@@ -389,22 +457,31 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         songIds: [],
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        userId: user?.id,
+        creatorName,
+        isPublic: true,
       };
       setPlaylists((prev) => [newPl, ...prev]);
-      upsertPlaylistToCloud(newPl).catch(console.warn);
+      upsertPlaylistToCloud(newPl, user?.id).catch(console.warn);
       addToast('Playlist Created', `"${newPl.name}" created.`, 'success');
       return newPl;
     },
-    [addToast]
+    [user, profile, addToast]
   );
 
   const updatePlaylist = useCallback(
     (id: string, updates: Partial<Playlist>) => {
+      const target = playlists.find((p) => p.id === id);
+      if (target && !canManagePlaylist(target)) {
+        addToast('Permission Denied', 'You can only edit playlists you created.', 'error');
+        return;
+      }
+
       setPlaylists((prev) =>
         prev.map((pl) => {
           if (pl.id === id) {
             const updated = { ...pl, ...updates, updatedAt: Date.now() };
-            upsertPlaylistToCloud(updated).catch(console.warn);
+            upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
             return updated;
           }
           return pl;
@@ -412,12 +489,17 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       );
       addToast('Playlist Updated', 'Changes saved.', 'info');
     },
-    [addToast]
+    [playlists, canManagePlaylist, user, addToast]
   );
 
   const deletePlaylist = useCallback(
     (id: string) => {
       const pl = playlists.find((p) => p.id === id);
+      if (pl && !canManagePlaylist(pl)) {
+        addToast('Permission Denied', 'You can only delete playlists you created.', 'error');
+        return;
+      }
+
       setPlaylists((prev) => prev.filter((p) => p.id !== id));
       deletePlaylistFromCloud(id).catch(console.warn);
       if (selectedPlaylistId === id) {
@@ -427,11 +509,17 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         addToast('Playlist Deleted', `"${pl.name}" removed.`, 'info');
       }
     },
-    [playlists, selectedPlaylistId, setActivePage, addToast]
+    [playlists, canManagePlaylist, selectedPlaylistId, setActivePage, addToast]
   );
 
   const addSongToPlaylist = useCallback(
     (playlistId: string, songId: string) => {
+      const target = playlists.find((p) => p.id === playlistId);
+      if (target && !canManagePlaylist(target)) {
+        addToast('Permission Denied', 'You can only modify playlists you created.', 'error');
+        return;
+      }
+
       let plName = '';
       setPlaylists((prev) =>
         prev.map((pl) => {
@@ -443,7 +531,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
               songIds: [...pl.songIds, songId],
               updatedAt: Date.now(),
             };
-            upsertPlaylistToCloud(updated).catch(console.warn);
+            upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
             return updated;
           }
           return pl;
@@ -451,11 +539,17 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       );
       addToast('Added to Playlist', `Saved to ${plName || 'playlist'}`, 'success');
     },
-    [addToast]
+    [playlists, canManagePlaylist, user, addToast]
   );
 
   const removeSongFromPlaylist = useCallback(
     (playlistId: string, songId: string) => {
+      const target = playlists.find((p) => p.id === playlistId);
+      if (target && !canManagePlaylist(target)) {
+        addToast('Permission Denied', 'You can only modify playlists you created.', 'error');
+        return;
+      }
+
       setPlaylists((prev) =>
         prev.map((pl) => {
           if (pl.id === playlistId) {
@@ -464,7 +558,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
               songIds: pl.songIds.filter((id) => id !== songId),
               updatedAt: Date.now(),
             };
-            upsertPlaylistToCloud(updated).catch(console.warn);
+            upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
             return updated;
           }
           return pl;
@@ -472,11 +566,17 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       );
       addToast('Removed from Playlist', 'Track removed.', 'info');
     },
-    [addToast]
+    [playlists, canManagePlaylist, user, addToast]
   );
 
   const reorderPlaylistSongs = useCallback(
     (playlistId: string, fromIndex: number, toIndex: number) => {
+      const target = playlists.find((p) => p.id === playlistId);
+      if (target && !canManagePlaylist(target)) {
+        addToast('Permission Denied', 'You can only reorder your own playlists.', 'error');
+        return;
+      }
+
       setPlaylists((prev) =>
         prev.map((pl) => {
           if (pl.id === playlistId) {
@@ -488,14 +588,14 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
               songIds: copy,
               updatedAt: Date.now(),
             };
-            upsertPlaylistToCloud(updated).catch(console.warn);
+            upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
             return updated;
           }
           return pl;
         })
       );
     },
-    []
+    [playlists, canManagePlaylist, user, addToast]
   );
 
   const clearRecentlyPlayed = useCallback(() => {
@@ -537,14 +637,14 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setRecentlyPlayedIds(storage.getRecentlyPlayedIds());
         setSettings(storage.getSettings());
         setRecentSearches(storage.getRecentSearches());
-        bulkSyncToCloud(loadedSongs, loadedPlaylists).catch(console.warn);
+        bulkSyncToCloud(loadedSongs, loadedPlaylists, user?.id).catch(console.warn);
         addToast('Import Successful', res.message, 'success');
       } else {
         addToast('Import Failed', res.message, 'error');
       }
       return res;
     },
-    [addToast]
+    [user, addToast]
   );
 
   const favorites = useMemo(() => songs.filter((s) => s.isFavorite), [songs]);
@@ -577,6 +677,8 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         playlistToEdit,
         songToAddToPlaylist,
         toasts,
+        canManagePlaylist,
+        canManageSong,
         setActivePage,
         setSearchQuery,
         setSearchFilter,
@@ -626,4 +728,3 @@ export const useLibrary = () => {
   }
   return context;
 };
-

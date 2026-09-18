@@ -16,6 +16,7 @@ import { useLibrary } from '../../context/LibraryContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { AudioVisualizer } from '../player/AudioVisualizer';
 import { PWAInstallButton } from '../common/PWAInstallButton';
+import { UserAccountMenu } from '../auth/UserAccountMenu';
 
 interface SidebarProps {
   onOpenShortcuts?: () => void;
@@ -156,6 +157,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenShortcuts }) => {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* User Account / Profile */}
+      <div className="my-1.5">
+        <UserAccountMenu variant="full" />
       </div>
 
       {/* PWA Install */}

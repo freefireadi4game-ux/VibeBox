@@ -8,12 +8,16 @@ export const AddToPlaylistModal: React.FC = () => {
     songToAddToPlaylist,
     closeAddToPlaylistModal,
     playlists,
+    canManagePlaylist,
     addSongToPlaylist,
     removeSongFromPlaylist,
     openCreatePlaylistModal,
   } = useLibrary();
 
   if (!songToAddToPlaylist) return null;
+
+  // Only allow adding songs to playlists the user has permissions to modify
+  const manageablePlaylists = playlists.filter((pl) => canManagePlaylist(pl));
 
   const togglePlaylistSelection = (playlistId: string, isIncluded: boolean) => {
     if (isIncluded) {
@@ -56,13 +60,14 @@ export const AddToPlaylistModal: React.FC = () => {
 
           {/* Playlist list */}
           <div className="flex-1 overflow-y-auto py-3 space-y-1.5 pr-1">
-            {playlists.length === 0 ? (
+            {manageablePlaylists.length === 0 ? (
               <div className="py-8 text-center text-zinc-500 space-y-2">
                 <ListMusic className="w-8 h-8 mx-auto opacity-40 text-violet-400" />
-                <p className="text-xs">No playlists found</p>
+                <p className="text-xs">No editable playlists available</p>
+                <p className="text-[11px] text-zinc-500">Create a playlist to add this track.</p>
               </div>
             ) : (
-              playlists.map((pl) => {
+              manageablePlaylists.map((pl) => {
                 const isIncluded = pl.songIds.includes(songToAddToPlaylist.id);
                 return (
                   <button
