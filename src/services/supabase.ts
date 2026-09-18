@@ -104,20 +104,28 @@ export async function fetchSongsFromCloud(): Promise<Song[] | null> {
   try {
     const { data, error } = await client
       .from('songs')
-      .select('*');
+      .select('id, youtube_id, title, channel, thumbnail_url, duration, is_public');
 
     if (error) {
-      console.error('Supabase: Error fetching shared songs from public.songs:', error.message, error.details || error);
+      console.error(
+        'Supabase: Error fetching shared songs from public.songs:',
+        error.message,
+        error.details || error
+      );
       return null;
     }
+
     if (!data) return [];
+
     return data.map(parseSongMetadataFromSupabase);
   } catch (err: any) {
-    console.error('Supabase: Network exception fetching songs:', err?.message || err);
+    console.error(
+      'Supabase: Network exception fetching songs:',
+      err?.message || err
+    );
     return null;
   }
 }
-
 export async function upsertSongToCloud(song: Song): Promise<boolean> {
   const client = getSupabaseClient();
   if (!client) return false;
@@ -320,9 +328,8 @@ export async function fetchPlaylistsFromCloud(): Promise<Playlist[] | null> {
   try {
     // 1. Query public.playlists (id, owner_id, name, description, cover_url, is_public)
     const { data: playlistsData, error: playlistsError } = await client
-      .from('playlists')
-      .select('id, owner_id, name, description, cover_url, is_public, created_at, updated_at')
-      .order('created_at', { ascending: false });
+  .from('playlists')
+  .select('id, owner_id, name, description, cover_url, is_public');
 
     if (playlistsError) {
       console.error('Supabase: Error fetching playlists from public.playlists:', playlistsError.message, playlistsError.details || playlistsError);
