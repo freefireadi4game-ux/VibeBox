@@ -16,6 +16,10 @@ import {
   Activity,
   Smartphone,
   Radio,
+  Cloud,
+  RefreshCw,
+  CheckCircle2,
+  WifiOff,
 } from 'lucide-react';
 import { useLibrary } from '../context/LibraryContext';
 import { usePlayer } from '../context/PlayerContext';
@@ -34,6 +38,9 @@ export const SettingsPage: React.FC = () => {
     importLibrary,
     songs,
     playlists,
+    cloudSyncStatus,
+    isCloudConnected,
+    syncWithCloud,
   } = useLibrary();
 
   const { isVideoVisible, setIsVideoVisible, playbackMode, setPlaybackMode } = usePlayer();
@@ -42,6 +49,13 @@ export const SettingsPage: React.FC = () => {
   const [confirmClearAll, setConfirmClearAll] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importJsonText, setImportJsonText] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    await syncWithCloud(true);
+    setIsSyncing(false);
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -369,6 +383,74 @@ export const SettingsPage: React.FC = () => {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Cloud Sync with Supabase */}
+      <div className="p-6 rounded-3xl bg-white/[0.03] border border-white/[0.08] space-y-4 shadow-xl backdrop-blur-xl">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-blue-500/15 text-blue-300 border border-blue-500/20">
+              <Cloud className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white">Cloud Database Sync (Supabase)</h3>
+              <p className="text-xs text-zinc-400">
+                Synchronize your songs, playlists, and favorites across devices in real time.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {cloudSyncStatus === 'synced' && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                Synced
+              </span>
+            )}
+            {cloudSyncStatus === 'syncing' && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                <RefreshCw className="w-3.5 h-3.5 text-indigo-400 animate-spin" />
+                Syncing...
+              </span>
+            )}
+            {cloudSyncStatus === 'offline' && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-800 text-zinc-400 border border-white/10">
+                <WifiOff className="w-3.5 h-3.5 text-zinc-400" />
+                Local Storage
+              </span>
+            )}
+            {cloudSyncStatus === 'error' && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                Offline Fallback
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-black/30 border border-white/[0.05] space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div className="space-y-1">
+              <p className="text-zinc-300 font-medium">
+                {isCloudConnected
+                  ? 'Supabase connection established via public environment keys.'
+                  : 'Supabase URL / Publishable Key not detected in environment. Using browser local storage.'}
+              </p>
+              <p className="text-[11px] text-zinc-500">
+                Seamless hybrid storage: instant offline caching with background cloud replication.
+              </p>
+            </div>
+
+            <button
+              onClick={handleManualSync}
+              disabled={isSyncing || cloudSyncStatus === 'syncing'}
+              className="px-4 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-zinc-200 hover:text-white border border-white/[0.08] text-xs font-semibold flex items-center justify-center gap-2 transition-all shrink-0 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-indigo-400' : ''}`} />
+              <span>{isSyncing ? 'Syncing...' : 'Sync Now'}</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* 4. Library Backup & Export / Import */}

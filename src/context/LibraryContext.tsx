@@ -1,6 +1,18 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import { Song, Playlist, ToastMessage, ActivePage, UserSettings } from '../types';
 import { storage } from '../services/storage';
+import {
+  isSupabaseConfigured,
+  fetchSongsFromCloud,
+  fetchPlaylistsFromCloud,
+  upsertSongToCloud,
+  deleteSongFromCloud,
+  upsertPlaylistToCloud,
+  deletePlaylistFromCloud,
+  bulkSyncToCloud,
+} from '../services/supabase';
+
+export type CloudSyncStatus = 'idle' | 'syncing' | 'synced' | 'offline' | 'error';
 
 interface LibraryContextType {
   songs: Song[];
@@ -13,6 +25,11 @@ interface LibraryContextType {
   searchFilter: 'all' | 'songs' | 'playlists';
   settings: UserSettings;
   recentSearches: string[];
+
+  // Cloud Sync state
+  cloudSyncStatus: CloudSyncStatus;
+  isCloudConnected: boolean;
+  syncWithCloud: (manualTrigger?: boolean) => Promise<void>;
 
   // Modals state
   isAddSongOpen: boolean;
@@ -69,6 +86,9 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [recentlyPlayedIds, setRecentlyPlayedIds] = useState<string[]>(() => storage.getRecentlyPlayedIds());
   const [settings, setSettings] = useState<UserSettings>(() => storage.getSettings());
   const [recentSearches, setRecentSearches] = useState<string[]>(() => storage.getRecentSearches());
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>(() =>
+    isSupabaseConfigured() ? 'syncing' : 'offline'
+  );
 
   const [activePage, setActivePageInternal] = useState<ActivePage>('home');
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
@@ -88,7 +108,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     document.documentElement.classList.add(`theme-${settings.theme || 'graphite'}`);
   }, [settings.theme]);
 
-  // Persist songs and playlists whenever they change
+  // Persist songs and playlists whenever they change to localStorage as fallback
   useEffect(() => {
     storage.saveSongs(songs);
   }, [songs]);
@@ -120,6 +140,90 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const removeToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  // Cloud Synchronization
+  const syncWithCloud = useCallback(
+    async (manualTrigger: boolean = false) => {
+      if (!isSupabaseConfigured()) {
+        setCloudSyncStatus('offline');
+        if (manualTrigger) {
+          addToast('Supabase Not Configured', 'Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY to enable cloud sync.', 'info');
+        }
+        return;
+      }
+
+      setCloudSyncStatus('syncing');
+      try {
+        const [cloudSongs, cloudPlaylists] = await Promise.all([
+          fetchSongsFromCloud(),
+          fetchPlaylistsFromCloud(),
+        ]);
+
+        if (cloudSongs === null && cloudPlaylists === null) {
+          setCloudSyncStatus('error');
+          if (manualTrigger) {
+            addToast('Cloud Sync Error', 'Could not reach Supabase. Operating with local storage.', 'error');
+          }
+          return;
+        }
+
+        let finalSongs = songs;
+        let finalPlaylists = playlists;
+
+        if (cloudSongs && cloudSongs.length > 0) {
+          // Merge cloud songs with local storage
+          const songMap = new Map<string, Song>();
+          cloudSongs.forEach((s) => songMap.set(s.id, s));
+          // Add any local-only songs not yet on cloud
+          songs.forEach((s) => {
+            if (!songMap.has(s.id)) {
+              songMap.set(s.id, s);
+              upsertSongToCloud(s).catch(console.warn);
+            }
+          });
+          finalSongs = Array.from(songMap.values());
+          setSongs(finalSongs);
+          storage.saveSongs(finalSongs);
+        } else if (cloudSongs && cloudSongs.length === 0 && songs.length > 0) {
+          // Cloud table is empty, seed cloud with local songs
+          bulkSyncToCloud(songs, playlists).catch(console.warn);
+        }
+
+        if (cloudPlaylists && cloudPlaylists.length > 0) {
+          const playlistMap = new Map<string, Playlist>();
+          cloudPlaylists.forEach((p) => playlistMap.set(p.id, p));
+          playlists.forEach((p) => {
+            if (!playlistMap.has(p.id)) {
+              playlistMap.set(p.id, p);
+              upsertPlaylistToCloud(p).catch(console.warn);
+            }
+          });
+          finalPlaylists = Array.from(playlistMap.values());
+          setPlaylists(finalPlaylists);
+          storage.savePlaylists(finalPlaylists);
+        } else if (cloudPlaylists && cloudPlaylists.length === 0 && playlists.length > 0) {
+          bulkSyncToCloud([], playlists).catch(console.warn);
+        }
+
+        setCloudSyncStatus('synced');
+        if (manualTrigger) {
+          addToast('Cloud Synced', 'Library successfully synced with Supabase!', 'success');
+        }
+      } catch (err) {
+        console.warn('Supabase sync error:', err);
+        setCloudSyncStatus('error');
+        if (manualTrigger) {
+          addToast('Sync Failed', 'Failed to synchronize with Supabase.', 'error');
+        }
+      }
+    },
+    [songs, playlists, addToast]
+  );
+
+  // Initial cloud sync on mount
+  useEffect(() => {
+    syncWithCloud(false);
   }, []);
 
   const setActivePage = useCallback((page: ActivePage, playlistId: string | null = null) => {
@@ -163,17 +267,22 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setSongs((prev) => [newSong, ...prev]);
         targetSong = newSong;
         addToast('Song Added', `"${newSong.title}" saved to library.`, 'success');
+
+        // Cloud sync
+        upsertSongToCloud(newSong).catch(console.warn);
       }
 
       if (playlistId) {
         setPlaylists((prev) =>
           prev.map((pl) => {
             if (pl.id === playlistId && !pl.songIds.includes(targetSong.id)) {
-              return {
+              const updatedPl = {
                 ...pl,
                 songIds: [...pl.songIds, targetSong.id],
                 updatedAt: Date.now(),
               };
+              upsertPlaylistToCloud(updatedPl).catch(console.warn);
+              return updatedPl;
             }
             return pl;
           })
@@ -187,7 +296,16 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const updateSong = useCallback(
     (id: string, updates: Partial<Song>) => {
-      setSongs((prev) => prev.map((s) => (s.id === id ? { ...s, ...updates } : s)));
+      setSongs((prev) =>
+        prev.map((s) => {
+          if (s.id === id) {
+            const updated = { ...s, ...updates };
+            upsertSongToCloud(updated).catch(console.warn);
+            return updated;
+          }
+          return s;
+        })
+      );
       addToast('Updated', 'Song information updated.', 'info');
     },
     [addToast]
@@ -198,12 +316,23 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const target = songs.find((s) => s.id === id);
       setSongs((prev) => prev.filter((s) => s.id !== id));
       setPlaylists((prev) =>
-        prev.map((pl) => ({
-          ...pl,
-          songIds: pl.songIds.filter((sId) => sId !== id),
-        }))
+        prev.map((pl) => {
+          if (pl.songIds.includes(id)) {
+            const updated = {
+              ...pl,
+              songIds: pl.songIds.filter((sId) => sId !== id),
+              updatedAt: Date.now(),
+            };
+            upsertPlaylistToCloud(updated).catch(console.warn);
+            return updated;
+          }
+          return pl;
+        })
       );
       setRecentlyPlayedIds((prev) => prev.filter((sId) => sId !== id));
+
+      // Cloud deletion
+      deleteSongFromCloud(id).catch(console.warn);
 
       if (target) {
         addToast('Song Removed', `"${target.title}" was removed from your library.`, 'info');
@@ -221,7 +350,9 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (s.id === id) {
             isFav = !s.isFavorite;
             songTitle = s.title;
-            return { ...s, isFavorite: isFav };
+            const updated = { ...s, isFavorite: isFav };
+            upsertSongToCloud(updated).catch(console.warn);
+            return updated;
           }
           return s;
         })
@@ -238,7 +369,9 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setSongs((prev) =>
       prev.map((s) => {
         if (s.id === id) {
-          return { ...s, playCount: (s.playCount || 0) + 1, lastPlayedAt: now };
+          const updated = { ...s, playCount: (s.playCount || 0) + 1, lastPlayedAt: now };
+          upsertSongToCloud(updated).catch(console.warn);
+          return updated;
         }
         return s;
       })
@@ -258,6 +391,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         updatedAt: Date.now(),
       };
       setPlaylists((prev) => [newPl, ...prev]);
+      upsertPlaylistToCloud(newPl).catch(console.warn);
       addToast('Playlist Created', `"${newPl.name}" created.`, 'success');
       return newPl;
     },
@@ -267,7 +401,14 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const updatePlaylist = useCallback(
     (id: string, updates: Partial<Playlist>) => {
       setPlaylists((prev) =>
-        prev.map((pl) => (pl.id === id ? { ...pl, ...updates, updatedAt: Date.now() } : pl))
+        prev.map((pl) => {
+          if (pl.id === id) {
+            const updated = { ...pl, ...updates, updatedAt: Date.now() };
+            upsertPlaylistToCloud(updated).catch(console.warn);
+            return updated;
+          }
+          return pl;
+        })
       );
       addToast('Playlist Updated', 'Changes saved.', 'info');
     },
@@ -278,6 +419,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     (id: string) => {
       const pl = playlists.find((p) => p.id === id);
       setPlaylists((prev) => prev.filter((p) => p.id !== id));
+      deletePlaylistFromCloud(id).catch(console.warn);
       if (selectedPlaylistId === id) {
         setActivePage('playlists');
       }
@@ -296,11 +438,13 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (pl.id === playlistId) {
             plName = pl.name;
             if (pl.songIds.includes(songId)) return pl;
-            return {
+            const updated = {
               ...pl,
               songIds: [...pl.songIds, songId],
               updatedAt: Date.now(),
             };
+            upsertPlaylistToCloud(updated).catch(console.warn);
+            return updated;
           }
           return pl;
         })
@@ -315,11 +459,13 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setPlaylists((prev) =>
         prev.map((pl) => {
           if (pl.id === playlistId) {
-            return {
+            const updated = {
               ...pl,
               songIds: pl.songIds.filter((id) => id !== songId),
               updatedAt: Date.now(),
             };
+            upsertPlaylistToCloud(updated).catch(console.warn);
+            return updated;
           }
           return pl;
         })
@@ -337,11 +483,13 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
             const copy = [...pl.songIds];
             const [moved] = copy.splice(fromIndex, 1);
             copy.splice(toIndex, 0, moved);
-            return {
+            const updated = {
               ...pl,
               songIds: copy,
               updatedAt: Date.now(),
             };
+            upsertPlaylistToCloud(updated).catch(console.warn);
+            return updated;
           }
           return pl;
         })
@@ -382,11 +530,14 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     (jsonString: string) => {
       const res = storage.importLibraryJSON(jsonString);
       if (res.success) {
-        setSongs(storage.getSongs());
-        setPlaylists(storage.getPlaylists());
+        const loadedSongs = storage.getSongs();
+        const loadedPlaylists = storage.getPlaylists();
+        setSongs(loadedSongs);
+        setPlaylists(loadedPlaylists);
         setRecentlyPlayedIds(storage.getRecentlyPlayedIds());
         setSettings(storage.getSettings());
         setRecentSearches(storage.getRecentSearches());
+        bulkSyncToCloud(loadedSongs, loadedPlaylists).catch(console.warn);
         addToast('Import Successful', res.message, 'success');
       } else {
         addToast('Import Failed', res.message, 'error');
@@ -418,6 +569,9 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         searchFilter,
         settings,
         recentSearches,
+        cloudSyncStatus,
+        isCloudConnected: isSupabaseConfigured(),
+        syncWithCloud,
         isAddSongOpen,
         isCreatePlaylistOpen,
         playlistToEdit,
@@ -472,3 +626,4 @@ export const useLibrary = () => {
   }
   return context;
 };
+
