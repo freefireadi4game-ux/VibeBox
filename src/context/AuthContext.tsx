@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { UserProfile } from '../types';
 import {
@@ -51,80 +51,94 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [authModalView, setAuthModalView] = useState<AuthModalView>('login');
 
   const isConfigured = isSupabaseConfigured();
+  const isMountedRef = useRef(false);
+  const profileLoadRef = useRef<{ userId: string; promise: Promise<void> } | null>(null);
+  const loadedProfileUserIdRef = useRef<string | null>(null);
 
   // Helper to load or construct profile from public.profiles
-  const loadProfile = useCallback(async (authUser: User) => {
-    try {
-      const isDesignatedAdmin =
-        authUser.email?.toLowerCase() === 'freefireadi4game@gmail.com' ||
-        authUser.user_metadata?.role === 'admin';
+  const loadProfile = useCallback(async (authUser: User, force = false) => {
+    if (!isMountedRef.current) return;
 
-      const cloudProfile = await fetchUserProfileFromCloud(authUser.id);
-      if (cloudProfile) {
-        cloudProfile.email = cloudProfile.email || authUser.email;
-        // If profile exists, check if role needs promotion for the admin account
-        if (isDesignatedAdmin && cloudProfile.role !== 'admin') {
-          cloudProfile.role = 'admin';
-          upsertUserProfileToCloud(cloudProfile).catch(console.warn);
-        }
-        setProfile(cloudProfile);
-      } else {
-        // Fallback or initialize profile from user metadata
-        const determinedRole = isDesignatedAdmin ? 'admin' : (authUser.user_metadata?.role || 'user');
-        const fallbackProfile: UserProfile = {
-          id: authUser.id,
-          email: authUser.email,
-          username:
-            authUser.user_metadata?.username ||
-            authUser.user_metadata?.display_name ||
-            authUser.email?.split('@')[0] ||
-            'VibeListener',
-          full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.name || '',
-          avatar_url: authUser.user_metadata?.avatar_url || '',
-          role: determinedRole,
-          created_at: authUser.created_at,
-          updated_at: new Date().toISOString(),
-        };
-        setProfile(fallbackProfile);
-        // Attempt to create the row in public.profiles table with proper role
-        upsertUserProfileToCloud(fallbackProfile).catch(console.warn);
-      }
-    } catch (err) {
-      console.warn('AuthContext: Failed to load profile:', err);
+    const existingLoad = profileLoadRef.current;
+    if (existingLoad?.userId === authUser.id) {
+      await existingLoad.promise;
+      return;
     }
+    if (!force && loadedProfileUserIdRef.current === authUser.id) return;
+
+    const loadPromise = (async () => {
+      try {
+        const isDesignatedAdmin =
+          authUser.email?.toLowerCase() === 'freefireadi4game@gmail.com' ||
+          authUser.user_metadata?.role === 'admin';
+
+        const cloudProfile = await fetchUserProfileFromCloud(authUser.id);
+        if (!isMountedRef.current) return;
+
+        if (cloudProfile) {
+          cloudProfile.email = cloudProfile.email || authUser.email;
+          // If profile exists, check if role needs promotion for the admin account
+          if (isDesignatedAdmin && cloudProfile.role !== 'admin') {
+            cloudProfile.role = 'admin';
+            upsertUserProfileToCloud(cloudProfile).catch(console.warn);
+          }
+          setProfile(cloudProfile);
+        } else {
+          // Fallback or initialize profile from user metadata
+          const determinedRole = isDesignatedAdmin ? 'admin' : (authUser.user_metadata?.role || 'user');
+          const fallbackProfile: UserProfile = {
+            id: authUser.id,
+            email: authUser.email,
+            username:
+              authUser.user_metadata?.username ||
+              authUser.user_metadata?.display_name ||
+              authUser.email?.split('@')[0] ||
+              'VibeListener',
+            full_name: authUser.user_metadata?.full_name || authUser.user_metadata?.name || '',
+            avatar_url: authUser.user_metadata?.avatar_url || '',
+            role: determinedRole,
+            created_at: authUser.created_at,
+            updated_at: new Date().toISOString(),
+          };
+          setProfile(fallbackProfile);
+          // Attempt to create the row in public.profiles table with proper role
+          upsertUserProfileToCloud(fallbackProfile).catch(console.warn);
+        }
+
+        loadedProfileUserIdRef.current = authUser.id;
+      } catch (err) {
+        console.warn('AuthContext: Failed to load profile:', err);
+      }
+    })();
+
+    profileLoadRef.current = { userId: authUser.id, promise: loadPromise };
+    loadPromise.then(
+      () => {
+        if (profileLoadRef.current?.promise === loadPromise) profileLoadRef.current = null;
+      },
+      () => {
+        if (profileLoadRef.current?.promise === loadPromise) profileLoadRef.current = null;
+      }
+    );
+    await loadPromise;
   }, []);
 
   // Initialize session & register listener
   useEffect(() => {
+    isMountedRef.current = true;
     const client = getSupabaseClient();
     if (!client) {
       setIsLoading(false);
-      return;
+      return () => {
+        isMountedRef.current = false;
+      };
     }
 
     let isMounted = true;
 
-    // Get initial session
-    client.auth.getSession().then(({ data: { session: initialSession }, error }) => {
-      if (!isMounted) return;
-      if (error) {
-        console.warn('AuthContext: Error getting initial session:', error.message);
-      }
-      setSession(initialSession);
-      setUser(initialSession?.user ?? null);
-      if (initialSession?.user) {
-        loadProfile(initialSession.user);
-      } else {
-        setProfile(null);
-      }
-      setIsLoading(false);
-    });
+    const handleAuthState = async (currentSession: Session | null) => {
+      if (!isMounted || !isMountedRef.current) return;
 
-    // Listen for auth state changes
-    const {
-      data: { subscription },
-    } = client.auth.onAuthStateChange(async (event, currentSession) => {
-      if (!isMounted) return;
       setSession(currentSession);
       const currentUser = currentSession?.user ?? null;
       setUser(currentUser);
@@ -133,12 +147,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await loadProfile(currentUser);
       } else {
         setProfile(null);
+        loadedProfileUserIdRef.current = null;
       }
-      setIsLoading(false);
+
+      if (isMounted && isMountedRef.current) setIsLoading(false);
+    };
+
+    // Register the listener before reading the session so auth changes cannot be missed.
+    const {
+      data: { subscription },
+    } = client.auth.onAuthStateChange((_event, currentSession) => {
+      void handleAuthState(currentSession);
+    });
+
+    // Get initial session
+    client.auth.getSession().then(({ data: { session: initialSession }, error }) => {
+      if (!isMounted || !isMountedRef.current) return;
+      if (error) {
+        console.warn('AuthContext: Error getting initial session:', error.message);
+      }
+      void handleAuthState(initialSession);
     });
 
     return () => {
       isMounted = false;
+      isMountedRef.current = false;
       subscription.unsubscribe();
     };
   }, [loadProfile]);
@@ -265,7 +298,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const refreshProfile = useCallback(async () => {
     if (user) {
-      await loadProfile(user);
+      await loadProfile(user, true);
     }
   }, [user, loadProfile]);
 
