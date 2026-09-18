@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { Song, Playlist, ToastMessage, ActivePage, UserSettings } from '../types';
 import { storage } from '../services/storage';
 import { useAuth } from './AuthContext';
@@ -6,10 +6,12 @@ import {
   isSupabaseConfigured,
   fetchSongsFromCloud,
   fetchPlaylistsFromCloud,
+  fetchUserDataFromCloud,
   upsertSongToCloud,
   deleteSongFromCloud,
   upsertPlaylistToCloud,
   deletePlaylistFromCloud,
+  upsertUserDataToCloud,
   bulkSyncToCloud,
 } from '../services/supabase';
 
@@ -86,7 +88,7 @@ interface LibraryContextType {
 const LibraryContext = createContext<LibraryContextType | null>(null);
 
 export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, profile, isAdmin } = useAuth();
+  const { user, profile, isAdmin, isLoading: isAuthLoading } = useAuth();
 
   const [songs, setSongs] = useState<Song[]>(() => storage.getSongs());
   const [playlists, setPlaylists] = useState<Playlist[]>(() => storage.getPlaylists());
@@ -108,6 +110,9 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [playlistToEdit, setPlaylistToEdit] = useState<Playlist | null>(null);
   const [songToAddToPlaylist, setSongToAddToPlaylist] = useState<Song | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  // Ref to track last synced user to prevent redundant full sync loops
+  const lastSyncedUserIdRef = useRef<string | null | undefined>(undefined);
 
   // Ownership verification helpers
   const canManagePlaylist = useCallback(
@@ -136,7 +141,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     document.documentElement.classList.add(`theme-${settings.theme || 'graphite'}`);
   }, [settings.theme]);
 
-  // Persist songs and playlists whenever they change to localStorage as fallback
+  // Persist songs and playlists whenever they change to localStorage as fallback cache
   useEffect(() => {
     storage.saveSongs(songs);
   }, [songs]);
@@ -170,7 +175,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // Cloud Synchronization
+  // Fully automatic cloud sync
   const syncWithCloud = useCallback(
     async (manualTrigger: boolean = false) => {
       if (!isSupabaseConfigured()) {
@@ -183,60 +188,112 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       setCloudSyncStatus('syncing');
       try {
-        const [cloudSongs, cloudPlaylists] = await Promise.all([
+        const fetchUserDataPromise = user?.id ? fetchUserDataFromCloud(user.id) : Promise.resolve(null);
+        const [cloudSongs, cloudPlaylists, cloudUserData] = await Promise.all([
           fetchSongsFromCloud(),
           fetchPlaylistsFromCloud(),
+          fetchUserDataPromise,
         ]);
 
         if (cloudSongs === null && cloudPlaylists === null) {
           setCloudSyncStatus('error');
           if (manualTrigger) {
-            addToast('Cloud Sync Error', 'Could not reach Supabase. Operating with local storage.', 'error');
+            addToast('Cloud Sync Error', 'Could not reach Supabase. Operating with local storage cache.', 'error');
           }
           return;
         }
 
-        let finalSongs = songs;
-        let finalPlaylists = playlists;
-
+        // 1. Process Songs
+        let activeSongs = songs;
         if (cloudSongs && cloudSongs.length > 0) {
-          // Merge cloud songs with local storage
+          // Cloud songs exist, merge with local cache
           const songMap = new Map<string, Song>();
           cloudSongs.forEach((s) => songMap.set(s.id, s));
-          // Add any local-only songs not yet on cloud
-          songs.forEach((s) => {
-            if (!songMap.has(s.id)) {
-              songMap.set(s.id, s);
-              upsertSongToCloud(s, user?.id).catch(console.warn);
-            }
-          });
-          finalSongs = Array.from(songMap.values());
-          setSongs(finalSongs);
-          storage.saveSongs(finalSongs);
+
+          // If user favorited songs in user_data, apply favorites
+          if (cloudUserData?.favorites && cloudUserData.favorites.length > 0) {
+            const favSet = new Set(cloudUserData.favorites);
+            songMap.forEach((s) => {
+              if (favSet.has(s.id)) {
+                s.isFavorite = true;
+              }
+            });
+          }
+
+          // If there are local songs not yet on cloud and user is authenticated, upload them
+          if (user?.id) {
+            songs.forEach((s) => {
+              if (!songMap.has(s.id)) {
+                songMap.set(s.id, s);
+                upsertSongToCloud(s, user.id).catch(console.warn);
+              }
+            });
+          }
+
+          activeSongs = Array.from(songMap.values());
+          setSongs(activeSongs);
+          storage.saveSongs(activeSongs);
         } else if (cloudSongs && cloudSongs.length === 0 && songs.length > 0) {
-          // Cloud table is empty, seed cloud with local songs
-          bulkSyncToCloud(songs, playlists, user?.id).catch(console.warn);
+          // Cloud songs table is empty - automatically seed from local starter library
+          bulkSyncToCloud(songs, [], user?.id).catch(console.warn);
         }
 
+        // 2. Process Playlists
+        let activePlaylists = playlists;
         if (cloudPlaylists && cloudPlaylists.length > 0) {
           const playlistMap = new Map<string, Playlist>();
           cloudPlaylists.forEach((p) => playlistMap.set(p.id, p));
-          playlists.forEach((p) => {
-            if (!playlistMap.has(p.id)) {
-              playlistMap.set(p.id, p);
-              upsertPlaylistToCloud(p, user?.id).catch(console.warn);
-            }
-          });
-          finalPlaylists = Array.from(playlistMap.values());
-          setPlaylists(finalPlaylists);
-          storage.savePlaylists(finalPlaylists);
+
+          if (user?.id) {
+            playlists.forEach((p) => {
+              if (!playlistMap.has(p.id)) {
+                playlistMap.set(p.id, p);
+                upsertPlaylistToCloud(p, user.id).catch(console.warn);
+              }
+            });
+          }
+
+          activePlaylists = Array.from(playlistMap.values());
+          setPlaylists(activePlaylists);
+          storage.savePlaylists(activePlaylists);
         } else if (cloudPlaylists && cloudPlaylists.length === 0 && playlists.length > 0) {
+          // Cloud playlists table is empty - automatically seed from local playlists
           bulkSyncToCloud([], playlists, user?.id).catch(console.warn);
+        }
+
+        // 3. Process User Data (favorites, recently played, settings, searches)
+        if (user?.id) {
+          if (cloudUserData) {
+            if (cloudUserData.recentlyPlayed && cloudUserData.recentlyPlayed.length > 0) {
+              setRecentlyPlayedIds(cloudUserData.recentlyPlayed);
+              storage.saveRecentlyPlayedIds(cloudUserData.recentlyPlayed);
+            }
+            if (cloudUserData.recentSearches && cloudUserData.recentSearches.length > 0) {
+              setRecentSearches(cloudUserData.recentSearches);
+              storage.saveRecentSearches(cloudUserData.recentSearches);
+            }
+            if (cloudUserData.settings && Object.keys(cloudUserData.settings).length > 0) {
+              setSettings((prev) => {
+                const merged = { ...prev, ...cloudUserData.settings };
+                storage.saveSettings(merged);
+                return merged;
+              });
+            }
+          } else {
+            // First time user_data row init for this user
+            const currentFavIds = activeSongs.filter((s) => s.isFavorite).map((s) => s.id);
+            upsertUserDataToCloud(user.id, {
+              favorites: currentFavIds,
+              recentlyPlayed: recentlyPlayedIds,
+              settings,
+              recentSearches,
+            }).catch(console.warn);
+          }
         }
 
         setCloudSyncStatus('synced');
         if (manualTrigger) {
-          addToast('Cloud Synced', 'Library successfully synced with Supabase!', 'success');
+          addToast('Cloud Synced', 'Library and preferences synchronized with Supabase.', 'success');
         }
       } catch (err) {
         console.warn('Supabase sync error:', err);
@@ -246,13 +303,19 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
       }
     },
-    [songs, playlists, user, addToast]
+    [songs, playlists, recentlyPlayedIds, settings, recentSearches, user, addToast]
   );
 
-  // Initial cloud sync on mount
+  // Automatic sync whenever user authentication state loads or changes
   useEffect(() => {
-    syncWithCloud(false);
-  }, []);
+    if (isAuthLoading) return;
+
+    const currentUserId = user?.id || null;
+    if (lastSyncedUserIdRef.current !== currentUserId) {
+      lastSyncedUserIdRef.current = currentUserId;
+      syncWithCloud(false);
+    }
+  }, [user?.id, isAuthLoading, syncWithCloud]);
 
   const setActivePage = useCallback((page: ActivePage, playlistId: string | null = null) => {
     setActivePageInternal(page);
@@ -262,21 +325,42 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
-  const updateSettings = useCallback((newSettings: Partial<UserSettings>) => {
-    setSettings((prev) => ({ ...prev, ...newSettings }));
-  }, []);
+  const updateSettings = useCallback(
+    (newSettings: Partial<UserSettings>) => {
+      setSettings((prev) => {
+        const merged = { ...prev, ...newSettings };
+        if (user?.id) {
+          upsertUserDataToCloud(user.id, { settings: merged }).catch(console.warn);
+        }
+        return merged;
+      });
+    },
+    [user]
+  );
 
-  const addRecentSearch = useCallback((term: string) => {
-    const clean = term.trim();
-    if (!clean) return;
-    setRecentSearches((prev) => [clean, ...prev.filter((item) => item.toLowerCase() !== clean.toLowerCase())].slice(0, 10));
-  }, []);
+  const addRecentSearch = useCallback(
+    (term: string) => {
+      const clean = term.trim();
+      if (!clean) return;
+      setRecentSearches((prev) => {
+        const next = [clean, ...prev.filter((item) => item.toLowerCase() !== clean.toLowerCase())].slice(0, 10);
+        if (user?.id) {
+          upsertUserDataToCloud(user.id, { recentSearches: next }).catch(console.warn);
+        }
+        return next;
+      });
+    },
+    [user]
+  );
 
   const clearRecentSearches = useCallback(() => {
     setRecentSearches([]);
-  }, []);
+    if (user?.id) {
+      upsertUserDataToCloud(user.id, { recentSearches: [] }).catch(console.warn);
+    }
+  }, [user]);
 
-  // Song operations
+  // Song operations with automatic Supabase write
   const addSong = useCallback(
     (songData: Omit<Song, 'id' | 'addedAt' | 'playCount'>, playlistId?: string): Song => {
       const existing = songs.find((s) => s.youtubeId === songData.youtubeId);
@@ -298,7 +382,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         targetSong = newSong;
         addToast('Song Added', `"${newSong.title}" saved to library.`, 'success');
 
-        // Cloud sync
+        // Automatic Supabase INSERT
         upsertSongToCloud(newSong, user?.id).catch(console.warn);
       }
 
@@ -315,6 +399,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
                 songIds: [...pl.songIds, targetSong.id],
                 updatedAt: Date.now(),
               };
+              // Automatic Supabase UPDATE
               upsertPlaylistToCloud(updatedPl, user?.id).catch(console.warn);
               return updatedPl;
             }
@@ -339,6 +424,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         prev.map((s) => {
           if (s.id === id) {
             const updated = { ...s, ...updates };
+            // Automatic Supabase UPDATE
             upsertSongToCloud(updated, user?.id).catch(console.warn);
             return updated;
           }
@@ -369,7 +455,13 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
             return pl;
           })
         );
-        setRecentlyPlayedIds((prev) => prev.filter((sId) => sId !== id));
+        setRecentlyPlayedIds((prev) => {
+          const next = prev.filter((sId) => sId !== id);
+          if (user?.id) {
+            upsertUserDataToCloud(user.id, { recentlyPlayed: next }).catch(console.warn);
+          }
+          return next;
+        });
         addToast('Removed', `"${target.title}" removed from your playlists.`, 'info');
         return;
       }
@@ -389,9 +481,15 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
           return pl;
         })
       );
-      setRecentlyPlayedIds((prev) => prev.filter((sId) => sId !== id));
+      setRecentlyPlayedIds((prev) => {
+        const next = prev.filter((sId) => sId !== id);
+        if (user?.id) {
+          upsertUserDataToCloud(user.id, { recentlyPlayed: next }).catch(console.warn);
+        }
+        return next;
+      });
 
-      // Cloud deletion
+      // Automatic Supabase DELETE
       deleteSongFromCloud(id).catch(console.warn);
 
       if (target) {
@@ -405,18 +503,28 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     (id: string) => {
       let isFav = false;
       let songTitle = '';
-      setSongs((prev) =>
-        prev.map((s) => {
+      setSongs((prev) => {
+        const nextSongs = prev.map((s) => {
           if (s.id === id) {
             isFav = !s.isFavorite;
             songTitle = s.title;
             const updated = { ...s, isFavorite: isFav };
+            // Automatic Supabase song UPDATE
             upsertSongToCloud(updated, user?.id).catch(console.warn);
             return updated;
           }
           return s;
-        })
-      );
+        });
+
+        // Update user_data.favorites in Supabase
+        if (user?.id) {
+          const favIds = nextSongs.filter((s) => s.isFavorite).map((s) => s.id);
+          upsertUserDataToCloud(user.id, { favorites: favIds }).catch(console.warn);
+        }
+
+        return nextSongs;
+      });
+
       if (songTitle) {
         addToast(isFav ? 'Added to Favorites' : 'Removed from Favorites', `"${songTitle}"`, 'success');
       }
@@ -424,22 +532,33 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [user, addToast]
   );
 
-  const recordPlay = useCallback((id: string) => {
-    const now = Date.now();
-    setSongs((prev) =>
-      prev.map((s) => {
-        if (s.id === id) {
-          const updated = { ...s, playCount: (s.playCount || 0) + 1, lastPlayedAt: now };
-          upsertSongToCloud(updated, user?.id).catch(console.warn);
-          return updated;
-        }
-        return s;
-      })
-    );
-    setRecentlyPlayedIds((prev) => [id, ...prev.filter((item) => item !== id)].slice(0, 50));
-  }, [user]);
+  const recordPlay = useCallback(
+    (id: string) => {
+      const now = Date.now();
+      setSongs((prev) =>
+        prev.map((s) => {
+          if (s.id === id) {
+            const updated = { ...s, playCount: (s.playCount || 0) + 1, lastPlayedAt: now };
+            // Automatic Supabase song play_count UPDATE
+            upsertSongToCloud(updated, user?.id).catch(console.warn);
+            return updated;
+          }
+          return s;
+        })
+      );
 
-  // Playlist operations
+      setRecentlyPlayedIds((prev) => {
+        const next = [id, ...prev.filter((item) => item !== id)].slice(0, 50);
+        if (user?.id) {
+          upsertUserDataToCloud(user.id, { recentlyPlayed: next }).catch(console.warn);
+        }
+        return next;
+      });
+    },
+    [user]
+  );
+
+  // Playlist operations with automatic Supabase write
   const createPlaylist = useCallback(
     (name: string, description?: string): Playlist => {
       const creatorName =
@@ -462,7 +581,10 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         isPublic: true,
       };
       setPlaylists((prev) => [newPl, ...prev]);
+
+      // Automatic Supabase INSERT
       upsertPlaylistToCloud(newPl, user?.id).catch(console.warn);
+
       addToast('Playlist Created', `"${newPl.name}" created.`, 'success');
       return newPl;
     },
@@ -481,6 +603,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
         prev.map((pl) => {
           if (pl.id === id) {
             const updated = { ...pl, ...updates, updatedAt: Date.now() };
+            // Automatic Supabase UPDATE
             upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
             return updated;
           }
@@ -501,7 +624,10 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
 
       setPlaylists((prev) => prev.filter((p) => p.id !== id));
+
+      // Automatic Supabase DELETE
       deletePlaylistFromCloud(id).catch(console.warn);
+
       if (selectedPlaylistId === id) {
         setActivePage('playlists');
       }
@@ -531,6 +657,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
               songIds: [...pl.songIds, songId],
               updatedAt: Date.now(),
             };
+            // Automatic Supabase UPDATE
             upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
             return updated;
           }
@@ -558,6 +685,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
               songIds: pl.songIds.filter((id) => id !== songId),
               updatedAt: Date.now(),
             };
+            // Automatic Supabase UPDATE
             upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
             return updated;
           }
@@ -588,6 +716,7 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
               songIds: copy,
               updatedAt: Date.now(),
             };
+            // Automatic Supabase UPDATE
             upsertPlaylistToCloud(updated, user?.id).catch(console.warn);
             return updated;
           }
@@ -600,8 +729,11 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const clearRecentlyPlayed = useCallback(() => {
     setRecentlyPlayedIds([]);
+    if (user?.id) {
+      upsertUserDataToCloud(user.id, { recentlyPlayed: [] }).catch(console.warn);
+    }
     addToast('History Cleared', 'Recently played tracks cleared.', 'info');
-  }, [addToast]);
+  }, [user, addToast]);
 
   const clearAllData = useCallback(() => {
     storage.clearAllData();

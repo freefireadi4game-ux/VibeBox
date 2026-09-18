@@ -1,9 +1,12 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Song, Playlist, UserSettings, UserProfile } from '../types';
 
-// Read Vite client environment variables
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
-const supabasePublishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim();
+// Read Vite client environment variables (clean surrounding quotes/whitespace)
+const rawUrl = import.meta.env.VITE_SUPABASE_URL;
+const rawKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+const supabaseUrl = rawUrl ? String(rawUrl).trim().replace(/^["']|["']$/g, '') : '';
+const supabasePublishableKey = rawKey ? String(rawKey).trim().replace(/^["']|["']$/g, '') : '';
 
 // Verify whether valid Supabase configuration is present
 export const isSupabaseConfigured = (): boolean => {
@@ -39,28 +42,32 @@ export const supabase = getSupabaseClient();
 
 /**
  * Data transformation helpers:
- * Support both camelCase and snake_case column names so standard Supabase SQL schemas work seamlessly.
+ * Support schema column naming so standard Supabase SQL schemas work seamlessly.
  */
-export const formatSongForSupabase = (song: Song, userId?: string) => ({
-  id: song.id,
-  youtube_id: song.youtubeId,
-  title: song.title,
-  channel: song.channel,
-  thumbnail_url: song.thumbnailUrl,
-  duration: song.duration,
-  added_at: song.addedAt,
-  is_favorite: Boolean(song.isFavorite),
-  play_count: song.playCount || 0,
-  last_played_at: song.lastPlayedAt || null,
-  user_id: song.userId || userId || null,
-  is_public: song.isPublic ?? true,
-});
+export const formatSongForSupabase = (song: Song, userId?: string) => {
+  const resolvedUserId = song.userId || userId || null;
+  return {
+    id: song.id,
+    youtube_id: song.youtubeId,
+    title: song.title || 'Untitled Track',
+    channel: song.channel || 'Artist',
+    channel_title: song.channel || 'Artist',
+    thumbnail_url: song.thumbnailUrl || '',
+    duration: song.duration || 0,
+    added_at: song.addedAt || Date.now(),
+    is_favorite: Boolean(song.isFavorite),
+    play_count: song.playCount || 0,
+    last_played_at: song.lastPlayedAt || null,
+    user_id: resolvedUserId,
+    is_public: song.isPublic ?? true,
+  };
+};
 
 export const parseSongFromSupabase = (row: any): Song => ({
   id: String(row.id),
   youtubeId: String(row.youtube_id || row.youtubeId || ''),
   title: String(row.title || 'Untitled Track'),
-  channel: String(row.channel || 'Artist'),
+  channel: String(row.channel || row.channel_title || row.artist || 'Artist'),
   thumbnailUrl: String(row.thumbnail_url || row.thumbnailUrl || ''),
   duration: Number(row.duration) || 0,
   addedAt: Number(row.added_at || row.addedAt) || Date.now(),
@@ -71,19 +78,22 @@ export const parseSongFromSupabase = (row: any): Song => ({
   isPublic: row.is_public ?? row.isPublic ?? true,
 });
 
-export const formatPlaylistForSupabase = (playlist: Playlist, userId?: string) => ({
-  id: playlist.id,
-  name: playlist.name,
-  description: playlist.description || '',
-  song_ids: playlist.songIds || [],
-  created_at: playlist.createdAt,
-  updated_at: playlist.updatedAt,
-  cover_url: playlist.coverUrl || null,
-  is_system: Boolean(playlist.isSystem),
-  user_id: playlist.userId || userId || null,
-  creator_name: playlist.creatorName || null,
-  is_public: playlist.isPublic ?? true,
-});
+export const formatPlaylistForSupabase = (playlist: Playlist, userId?: string) => {
+  const resolvedUserId = playlist.userId || userId || null;
+  return {
+    id: playlist.id,
+    name: playlist.name || 'Untitled Playlist',
+    description: playlist.description || '',
+    song_ids: Array.isArray(playlist.songIds) ? playlist.songIds : [],
+    created_at: playlist.createdAt || Date.now(),
+    updated_at: playlist.updatedAt || Date.now(),
+    cover_url: playlist.coverUrl || null,
+    is_system: Boolean(playlist.isSystem),
+    user_id: resolvedUserId,
+    creator_name: playlist.creatorName || null,
+    is_public: playlist.isPublic ?? true,
+  };
+};
 
 export const parsePlaylistFromSupabase = (row: any): Playlist => ({
   id: String(row.id),
@@ -103,8 +113,28 @@ export const parsePlaylistFromSupabase = (row: any): Playlist => ({
   isPublic: row.is_public ?? row.isPublic ?? true,
 });
 
+export const formatUserDataForSupabase = (
+  userId: string,
+  userData: {
+    favorites?: string[];
+    recentlyPlayed?: string[];
+    settings?: Partial<UserSettings>;
+    recentSearches?: string[];
+  }
+) => {
+  const row: Record<string, any> = {
+    user_id: userId,
+    updated_at: new Date().toISOString(),
+  };
+  if (userData.favorites !== undefined) row.favorites = userData.favorites;
+  if (userData.recentlyPlayed !== undefined) row.recently_played = userData.recentlyPlayed;
+  if (userData.settings !== undefined) row.settings = userData.settings;
+  if (userData.recentSearches !== undefined) row.recent_searches = userData.recentSearches;
+  return row;
+};
+
 /**
- * Cloud Operations with Graceful Fallback
+ * Cloud Operations with Direct PostgREST Writes
  */
 
 export async function fetchSongsFromCloud(): Promise<Song[] | null> {
@@ -143,6 +173,41 @@ export async function fetchPlaylistsFromCloud(): Promise<Playlist[] | null> {
   }
 }
 
+export async function fetchUserDataFromCloud(userId: string): Promise<{
+  favorites: string[];
+  recentlyPlayed: string[];
+  settings: Partial<UserSettings> | null;
+  recentSearches: string[];
+} | null> {
+  const client = getSupabaseClient();
+  if (!client || !userId) return null;
+
+  try {
+    const { data, error } = await client
+      .from('user_data')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn('Supabase: Error fetching user_data:', error.message);
+      return null;
+    }
+
+    if (!data) return null;
+
+    return {
+      favorites: Array.isArray(data.favorites) ? data.favorites : [],
+      recentlyPlayed: Array.isArray(data.recently_played) ? data.recently_played : [],
+      settings: typeof data.settings === 'object' && data.settings !== null ? data.settings : null,
+      recentSearches: Array.isArray(data.recent_searches) ? data.recent_searches : [],
+    };
+  } catch (err) {
+    console.warn('Supabase: Network error fetching user_data:', err);
+    return null;
+  }
+}
+
 export async function upsertSongToCloud(song: Song, userId?: string): Promise<boolean> {
   const client = getSupabaseClient();
   if (!client) return false;
@@ -151,7 +216,7 @@ export async function upsertSongToCloud(song: Song, userId?: string): Promise<bo
     const row = formatSongForSupabase(song, userId);
     const { error } = await client.from('songs').upsert(row, { onConflict: 'id' });
     if (error) {
-      console.warn('Supabase: Error upserting song:', error.message);
+      console.warn('Supabase: Error upserting song:', error.message, error.details);
       return false;
     }
     return true;
@@ -186,7 +251,7 @@ export async function upsertPlaylistToCloud(playlist: Playlist, userId?: string)
     const row = formatPlaylistForSupabase(playlist, userId);
     const { error } = await client.from('playlists').upsert(row, { onConflict: 'id' });
     if (error) {
-      console.warn('Supabase: Error upserting playlist:', error.message);
+      console.warn('Supabase: Error upserting playlist:', error.message, error.details);
       return false;
     }
     return true;
@@ -213,23 +278,80 @@ export async function deletePlaylistFromCloud(playlistId: string): Promise<boole
   }
 }
 
-export async function bulkSyncToCloud(songs: Song[], playlists: Playlist[], userId?: string): Promise<boolean> {
+export async function upsertUserDataToCloud(
+  userId: string,
+  data: {
+    favorites?: string[];
+    recentlyPlayed?: string[];
+    settings?: Partial<UserSettings>;
+    recentSearches?: string[];
+  }
+): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client || !userId) return false;
+
+  try {
+    const row = formatUserDataForSupabase(userId, data);
+    const { error } = await client.from('user_data').upsert(row, { onConflict: 'user_id' });
+    if (error) {
+      console.warn('Supabase: Error upserting user_data:', error.message, error.details);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('Supabase: Network error saving user_data:', err);
+    return false;
+  }
+}
+
+export async function bulkSyncToCloud(
+  songs: Song[],
+  playlists: Playlist[],
+  userId?: string,
+  userData?: {
+    favorites?: string[];
+    recentlyPlayed?: string[];
+    settings?: Partial<UserSettings>;
+    recentSearches?: string[];
+  }
+): Promise<boolean> {
   const client = getSupabaseClient();
   if (!client) return false;
 
   try {
+    const promises: Promise<any>[] = [];
+
     if (songs.length > 0) {
       const songRows = songs.map((s) => formatSongForSupabase(s, userId));
-      const { error: songError } = await client.from('songs').upsert(songRows, { onConflict: 'id' });
-      if (songError) console.warn('Supabase: Bulk sync songs error:', songError.message);
+      promises.push(
+        (async () => {
+          const { error } = await client.from('songs').upsert(songRows, { onConflict: 'id' });
+          if (error) console.warn('Supabase: Bulk sync songs error:', error.message);
+        })()
+      );
     }
 
     if (playlists.length > 0) {
       const playlistRows = playlists.map((p) => formatPlaylistForSupabase(p, userId));
-      const { error: plError } = await client.from('playlists').upsert(playlistRows, { onConflict: 'id' });
-      if (plError) console.warn('Supabase: Bulk sync playlists error:', plError.message);
+      promises.push(
+        (async () => {
+          const { error } = await client.from('playlists').upsert(playlistRows, { onConflict: 'id' });
+          if (error) console.warn('Supabase: Bulk sync playlists error:', error.message);
+        })()
+      );
     }
 
+    if (userId && userData) {
+      const userRow = formatUserDataForSupabase(userId, userData);
+      promises.push(
+        (async () => {
+          const { error } = await client.from('user_data').upsert(userRow, { onConflict: 'user_id' });
+          if (error) console.warn('Supabase: Bulk sync user_data error:', error.message);
+        })()
+      );
+    }
+
+    await Promise.all(promises);
     return true;
   } catch (err) {
     console.warn('Supabase: Bulk sync failed:', err);
