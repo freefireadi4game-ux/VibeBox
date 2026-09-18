@@ -4,8 +4,9 @@
  */
 
 import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { LibraryProvider, useLibrary } from './context/LibraryContext';
-import { PlayerProvider } from './context/PlayerContext';
+import { PlayerProvider, usePlayer } from './context/PlayerContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { TopHeader } from './components/layout/TopHeader';
 import { BottomNavigation } from './components/layout/BottomNavigation';
@@ -30,9 +31,10 @@ import { SettingsPage } from './pages/SettingsPage';
 
 const AppContent: React.FC = () => {
   const { activePage } = useLibrary();
+  const { currentSong } = usePlayer();
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
 
-  // Bind global keyboard shortcuts (Space, Arrows, M, S, R, N, P, Q, V, ?, Esc)
+  // Bind global keyboard shortcuts
   useKeyboardShortcuts({
     onToggleShortcutsModal: () => setIsShortcutsOpen((prev) => !prev),
   });
@@ -57,29 +59,56 @@ const AppContent: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#0a0c10] text-[#f1f3f7]">
-      {/* Desktop Sidebar */}
-      <Sidebar onOpenShortcuts={() => setIsShortcutsOpen(true)} />
+    <div className="relative flex h-screen w-screen overflow-hidden bg-[#050609] text-[#f1f4f9] select-none font-sans">
+      {/* Dynamic Ambient Aura Backdrop based on current song artwork */}
+      <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden opacity-35 transition-opacity duration-1000">
+        {currentSong?.thumbnailUrl ? (
+          <div
+            className="absolute -top-[20%] -left-[10%] w-[140%] h-[140%] bg-cover bg-center filter blur-[140px] scale-125 opacity-40 transition-all duration-1000 ease-out"
+            style={{ backgroundImage: `url(${currentSong.thumbnailUrl})` }}
+          />
+        ) : null}
+        <div className="absolute inset-0 bg-gradient-to-b from-[#050609]/70 via-[#050609]/90 to-[#050609]" />
+        <div className="absolute -top-40 right-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute top-1/2 -left-20 w-80 h-80 bg-violet-600/10 rounded-full blur-3xl pointer-events-none" />
+      </div>
+
+      {/* Desktop Floating/Docked Sidebar */}
+      <div className="relative z-10 hidden md:flex h-full py-4 pl-4">
+        <Sidebar onOpenShortcuts={() => setIsShortcutsOpen(true)} />
+      </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
+      <div className="relative z-10 flex-1 flex flex-col h-full overflow-hidden min-w-0">
         <TopHeader onOpenShortcuts={() => setIsShortcutsOpen(true)} />
 
-        <main className="flex-1 overflow-y-auto px-4 sm:px-8 py-6">
-          {renderActivePage()}
+        <main className="flex-1 overflow-y-auto px-4 sm:px-8 py-5 md:py-7">
+          <div className="max-w-7xl mx-auto w-full">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activePage}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.22, ease: 'easeOut' }}
+              >
+                {renderActivePage()}
+              </motion.div>
+            </AnimatePresence>
+          </div>
         </main>
       </div>
 
-      {/* Desktop Bottom Player */}
+      {/* Desktop Fixed Floating Player Bar */}
       <MusicPlayer />
 
-      {/* Mobile Mini Player */}
+      {/* Mobile Floating Mini Player */}
       <MiniPlayer />
 
-      {/* Mobile Bottom Nav */}
+      {/* Mobile Floating Bottom Nav */}
       <BottomNavigation />
 
-      {/* Fullscreen Player Modal */}
+      {/* Fullscreen Player Modal with Ambient Aura */}
       <FullPlayer />
 
       {/* Queue Drawer */}

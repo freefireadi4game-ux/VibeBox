@@ -1,5 +1,6 @@
 import React from 'react';
 import { Play, Pause, SkipForward, Heart } from 'lucide-react';
+import { motion } from 'motion/react';
 import { usePlayer } from '../../context/PlayerContext';
 import { useLibrary } from '../../context/LibraryContext';
 
@@ -13,13 +14,16 @@ export const MiniPlayer: React.FC = () => {
   const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 
   return (
-    <div
+    <motion.div
       id="vibebox-mini-player"
+      initial={{ y: 20, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      exit={{ y: 20, opacity: 0 }}
       onClick={() => setShowFullPlayer(true)}
-      className="md:hidden fixed bottom-[82px] left-3 right-3 z-30 bg-[#0d101d]/90 border border-white/[0.12] rounded-2xl shadow-2xl shadow-black/80 backdrop-blur-2xl overflow-hidden cursor-pointer select-none"
+      className="md:hidden fixed bottom-[84px] left-3 right-3 z-30 bg-[#070913]/95 border border-white/[0.1] rounded-2xl shadow-2xl shadow-black/90 backdrop-blur-2xl overflow-hidden cursor-pointer select-none"
     >
       {/* Top progress indicator line */}
-      <div className="w-full h-1 bg-white/[0.06]">
+      <div className="w-full h-[2px] bg-white/[0.08]">
         <div
           className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-violet-400 transition-all duration-300"
           style={{ width: `${progressPercent}%` }}
@@ -34,7 +38,7 @@ export const MiniPlayer: React.FC = () => {
             <circle
               cx="24"
               cy="24"
-              r="21"
+              r="20"
               fill="none"
               stroke="rgba(255, 255, 255, 0.08)"
               strokeWidth="2"
@@ -42,12 +46,12 @@ export const MiniPlayer: React.FC = () => {
             <circle
               cx="24"
               cy="24"
-              r="21"
+              r="20"
               fill="none"
               stroke="#a855f7"
               strokeWidth="2"
-              strokeDasharray={132}
-              strokeDashoffset={132 - (132 * progressPercent) / 100}
+              strokeDasharray={126}
+              strokeDashoffset={126 - (126 * progressPercent) / 100}
               strokeLinecap="round"
               className={isPlaying ? 'transition-all duration-300' : ''}
             />
@@ -55,7 +59,7 @@ export const MiniPlayer: React.FC = () => {
 
           {/* Center circular artwork */}
           <div
-            className={`relative w-9 h-9 rounded-full overflow-hidden shrink-0 bg-zinc-800 border border-white/10 shadow-sm transition-transform ${
+            className={`relative w-9 h-9 rounded-full overflow-hidden shrink-0 bg-zinc-900 border border-white/10 shadow-sm transition-transform ${
               isPlaying ? 'scale-100 ring-2 ring-violet-500/40' : 'scale-95 opacity-90'
             }`}
           >
@@ -76,9 +80,9 @@ export const MiniPlayer: React.FC = () => {
           </div>
         </div>
 
-        {/* Info */}
+        {/* Track Title & Artist */}
         <div className="flex-1 min-w-0 pr-1">
-          <p className="text-xs font-semibold text-white truncate">{currentSong.title}</p>
+          <p className="text-xs font-semibold text-white truncate tracking-tight">{currentSong.title}</p>
           <p className="text-[11px] text-zinc-400 truncate mt-0.5">{currentSong.channel}</p>
         </div>
 
@@ -96,7 +100,7 @@ export const MiniPlayer: React.FC = () => {
 
           <button
             onClick={togglePlay}
-            className="p-2.5 rounded-xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-violet-500 hover:from-indigo-400 hover:to-violet-400 text-white shadow-md shadow-indigo-950/50 border border-white/20 transition-transform active:scale-95"
+            className="p-2.5 rounded-xl bg-gradient-to-r from-indigo-500 via-purple-600 to-violet-600 hover:from-indigo-400 hover:to-violet-500 text-white shadow-md shadow-indigo-950/60 border border-white/20 transition-transform active:scale-95"
             aria-label={isPlaying ? 'Pause' : 'Play'}
           >
             {isPlaying ? (
@@ -115,6 +119,6 @@ export const MiniPlayer: React.FC = () => {
           </button>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 };
